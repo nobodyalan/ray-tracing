@@ -7,5 +7,5 @@ cmake --build build -j
 
 # Run all testcases. 
 # You can comment some lines to disable the run of specific examples.
-mkdir -p output/finercontrast
-build/PA1 testcases/scene01.txt output/scene02_1.bmp
+mkdir -p output/MIS
+build/PA1 testcases/scene01.txt output/MIS/multipleMIS.bmp

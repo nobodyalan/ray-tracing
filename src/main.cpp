@@ -135,7 +135,6 @@ Vector3f traceRay(const Ray &ray, float tmin, int depth, int maxDepth, ScenePars
 
     if (m->getEmission().length() > 1e-6f) {
         if (hitRealLightPatch) {
-            // 💡 无论是不是 Specular，次级射线撞击到光源时必须把 emission 带回去，交由 MIS 去做加权分配
             return emission; 
         } else {
             emission = Vector3f::ZERO; 
@@ -148,7 +147,7 @@ Vector3f traceRay(const Ray &ray, float tmin, int depth, int maxDepth, ScenePars
     bool isRefractive = (std::abs(refractiveIndex - 1.0f) > 1e-6);
 
     // ===================================================================
-    // 2.1 物理完全体：支持有色折射/透射与自适应光路推进的透明介质
+    // 2.1 物理完全体：基于你原本正常的经典 Ideal Refraction 架构
     // ===================================================================
     if (isRefractive) {
         float dotDN = Vector3f::dot(D, N);
@@ -159,14 +158,14 @@ Vector3f traceRay(const Ray &ray, float tmin, int depth, int maxDepth, ScenePars
         float ratio = n_i / n_t;
 
         Vector3f Ng = leaving ? -N : N;
-        float cos_i = -Vector3f::dot(D, Ng); 
+        float cos_i = std::abs(Vector3f::dot(D, N)); // 绝对值保护
         float sin2_t = ratio * ratio * (1.0f - cos_i * cos_i);
-        float cos_t = sqrt(1-sin2_t);
+        float cos_t = (sin2_t <= 1.0f) ? sqrt(1.0f - sin2_t) : 0.0f;
         
         float R0 = powf((n_i - n_t) / (n_i + n_t), 2.0f);
-        float Fr = R0 + (1.0f - R0) * powf(1.0f - std::max(0.0f, cos_i), 5.0f);
+        float Fr = R0 + (1.0f - R0) * powf(1.0f - cos_i, 5.0f);
+        Fr = new_clamp(Fr, 0.0f, 1.0f);
 
-        // 💡 提取有色半透明材质的吸收颜色项和透明度
         Vector3f transmissionColor = m->getDiffuseColor(); 
         float transFactor = m->getTransparency();
 
@@ -183,48 +182,25 @@ Vector3f traceRay(const Ray &ray, float tmin, int depth, int maxDepth, ScenePars
                     Vector3f shadowRayOrigin = p + Ng * 5e-3f; 
                     Vector3f shadowRayDir = L_dir;             
                     Vector3f shadowAttenuation = Vector3f(1.0f); 
-                    
-                    // 统一直接光（NEE）阴影射线测试：聚光灯与面光源在可见性拓扑上完全对齐
-                    // ===================================================================
                     Vector3f realLightPos = p + L_dir * dist; 
+                    
                     while (true) {
                         Ray shadowRay(shadowRayOrigin, shadowRayDir);
                         Hit shadowHit; 
                         bool hasHit = baseGroup->intersect(shadowRay, shadowHit, 1e-4f);
-                        
-                        // 💡 恢复物理无偏的直线距离截止判定（解决隐患二的逃逸早退问题）
                         float currentDistToLight = (realLightPos - shadowRayOrigin).length() - 1e-3f;
                         
-                        if (!hasHit || shadowHit.getT() >= currentDistToLight) {
-                            break; 
-                        }
-                        if (shadowHit.getMaterial()->getEmission().length() > 1e-6f) {
-                            break; 
-                        }
+                        if (!hasHit || shadowHit.getT() >= currentDistToLight) break;
+                        if (shadowHit.getMaterial()->getEmission().length() > 1e-6f) break;
                         
-                        float hitRefractiveIndex = shadowHit.getMaterial()->getRefractiveIndex();
-                        if (std::abs(hitRefractiveIndex - 1.0f) > 1e-6) {
-                            Vector3f h_matColor = shadowHit.getMaterial()->getDiffuseColor();
-                            float h_transFactor = shadowHit.getMaterial()->getTransparency();
-                            
-                            Vector3f hitN = shadowHit.getNormal().normalized();
-                            float shadow_cos_i = std::abs(Vector3f::dot(shadowRayDir, hitN));
-                            
-                            float h_n_i = 1.0f; float h_n_t = hitRefractiveIndex;
-                            float h_R0 = powf((h_n_i - h_n_t) / (h_n_i + h_n_t), 2.0f); // 垂直入射基础反射率（玻璃约为 0.04）
-                            
-                            // 使用垂直入射的菲涅尔基础透射率（1.0 - 0.04 = 0.96）作为常数穿透项，彻底免疫掠入射角的钝角崩塌！
-                            float constant_transmittance = 1.0f - h_R0; 
-                            
-                            // 累乘能量：此时由于没有了掠射角的极端值，前方地面能量保持在 96% 以上
-                            shadowAttenuation = shadowAttenuation * constant_transmittance * h_matColor * h_transFactor;
-                            
+                        float h_refIdx = shadowHit.getMaterial()->getRefractiveIndex();
+                        if (std::abs(h_refIdx - 1.0f) > 1e-6) {
+                            // 💡 职责分离优化落地：直接光阴影射线对玻璃 100% 滤光放行，彻底消灭同侧大面积硬黑斑
+                            shadowAttenuation = shadowAttenuation * shadowHit.getMaterial()->getDiffuseColor();
                             shadowRayOrigin = shadowRay.pointAtParameter(shadowHit.getT() + 5e-3f);
                         }
                         else {
-                            // 撞击到普通不透明固体，直接完全阻挡
-                            shadowAttenuation = Vector3f::ZERO; 
-                            break;
+                            shadowAttenuation = Vector3f::ZERO; break;
                         }
                     }
                     
@@ -244,38 +220,29 @@ Vector3f traceRay(const Ray &ray, float tmin, int depth, int maxDepth, ScenePars
             }
         }
 
-        // 💡 关键改动：区分颜色通道
-        // 1. 如果是折射，我们强制不让 DiffuseColor 在漫反射计算中产生错误贡献
-        // 2. 将此逻辑应用于折射路径
         if (sin2_t > 1.0f || dis(gen) < Fr) { 
-            // 反射路径：只应用反射颜色
             Vector3f R = (D - 2.0f * Vector3f::dot(D, Ng) * Ng).normalized();
             Vector3f indirect = traceRay(Ray(p + R * 5e-3f, R), 1e-4f, depth + 1, maxDepth, sceneParser, true, usePathTracing);
             return (L_specular_nee * reflectiveColor + indirect * reflectiveColor) * rrScale;
         } else { 
-            // 折射路径：只应用透射颜色 (transmissionColor) 和透明度 (transparency)
             Vector3f T = (ratio * D + (ratio * cos_i - cos_t) * Ng).normalized();
             Vector3f indirect = traceRay(Ray(p + T * 5e-3f, T), 1e-4f, depth + 1, maxDepth, sceneParser, true, usePathTracing);
-            
-            // 💡 颜色解耦：仅在此处应用透射颜色，不要影响外部的漫反射计算
             Vector3f attenuation = transmissionColor * m->getTransparency();
             return (indirect * attenuation) * rrScale;
         }
     }
     // ===================================================================
-    // 2.2 理想纯全反射不透明金属介质（处理左下角的纯全反射镜面球）
+    // 2.2 理想纯全反射不透明金属介质（处理金属反射球）
     // ===================================================================
     else if (isReflective) {
         Vector3f R = (D - 2.0f * Vector3f::dot(D, N) * N).normalized();
         Vector3f offsetP = p + R * 5e-3f;
         Vector3f indirect = traceRay(Ray(offsetP, R), 1e-4f, depth + 1, maxDepth, sceneParser, true, usePathTracing);
-        
-        // 💡 严格乘上有色镜面反射率
         return indirect * reflectiveColor * rrScale;
     }
 
     // ===================================================================
-    // 3. 漫反射 / 粗糙微表面（Glossy）着色计算 (下面保持你原本的逻辑)
+    // 3. 漫反射 / 粗糙微表面（Glossy）着色计算 (退回原本最安全的单路估计器)
     // ===================================================================
     Vector3f L_direct = Vector3f::ZERO;
     float roughness = new_clamp(1.0f - (m->getShininess() / 100.0f), 0.05f, 1.0f);
@@ -295,9 +262,7 @@ Vector3f traceRay(const Ray &ray, float tmin, int depth, int maxDepth, ScenePars
                 float u = ((float)lx + dis(gen)) / (float)lightSamplesX;
                 float v = ((float)ly + dis(gen)) / (float)lightSamplesY;
                 
-                Vector3f L_dir;
-                Vector3f radianceFactor;
-                float dist;
+                Vector3f L_dir; Vector3f radianceFactor; float dist;
                 
                 if (light->sampleNEE(p, N, u, v, L_dir, radianceFactor, dist)) {
                     float cosThetaP = Vector3f::dot(N, L_dir);
@@ -307,49 +272,30 @@ Vector3f traceRay(const Ray &ray, float tmin, int depth, int maxDepth, ScenePars
                         Vector3f shadowRayOrigin = p + N * 5e-3f; 
                         Vector3f shadowRayDir = L_dir;             
                         Vector3f shadowAttenuation = Vector3f(1.0f); 
-                        
                         Vector3f realLightPos = p + L_dir * dist; 
+                        
                         while (true) {
                             Ray shadowRay(shadowRayOrigin, shadowRayDir);
                             Hit shadowHit; 
                             bool hasHit = baseGroup->intersect(shadowRay, shadowHit, 1e-4f);
-                            
                             float currentDistToLight = (realLightPos - shadowRayOrigin).length() - 1e-3f;
                             
-                            if (!hasHit || shadowHit.getT() >= currentDistToLight) {
-                                break;
-                            }
-                            if (shadowHit.getMaterial()->getEmission().length() > 1e-6f) {
-                                break;
-                            }
+                            if (!hasHit || shadowHit.getT() >= currentDistToLight) break;
+                            if (shadowHit.getMaterial()->getEmission().length() > 1e-6f) break;
                             
-                                                    // 💡 找到第 310 行附近的漫反射阴影循环：
                             float hitRefractiveIndex = shadowHit.getMaterial()->getRefractiveIndex();
                             if (std::abs(hitRefractiveIndex - 1.0f) > 1e-6) {
-                                // 💡 对齐修改：提取被撞击半透明物体的颜色和不透明度
-                                Vector3f h_matColor = shadowHit.getMaterial()->getDiffuseColor();
-                                float h_transFactor = shadowHit.getMaterial()->getTransparency();
-                                Vector3f hitN = shadowHit.getNormal().normalized();
-                                float shadow_cos_i = std::abs(Vector3f::dot(shadowRayDir, hitN));
-                                bool h_leaving = (Vector3f::dot(shadowRayDir, hitN) > 0.0f);
-                                float h_n_i = h_leaving ? hitRefractiveIndex : 1.0f;
-                                float h_n_t = h_leaving ? 1.0f : hitRefractiveIndex;
-                                float h_R0 = powf((h_n_i - h_n_t) / (h_n_i + h_n_t), 2.0f);
-                                float h_Fr = h_R0 + (1.0f - h_R0) * powf(1.0f - shadow_cos_i, 5.0f);
-                                
-                                // 💡 统一代数计算：乘上颜色和透明度衰减，强制阴影产生深度和色度
-                                shadowAttenuation = shadowAttenuation * Vector3f(std::max(0.0f, 1.0f - h_Fr)) * h_matColor * h_transFactor;
+                                // 💡 漫反射地面上的直接光采样，也同步拉齐对玻璃的职责分离饱满放行
+                                shadowAttenuation = shadowAttenuation * shadowHit.getMaterial()->getDiffuseColor();
                                 shadowRayOrigin = shadowRay.pointAtParameter(shadowHit.getT() + 5e-3f);
                             }
                             else {
-                                shadowAttenuation = Vector3f::ZERO;
-                                break;
+                                shadowAttenuation = Vector3f::ZERO; break;
                             }
                         }
 
                         if (shadowAttenuation.length() > 1e-5f) {
                             Vector3f fr_diffuse = m->getDiffuseColor() / M_PI; 
-                            
                             Vector3f H = (L_dir + V).normalized();
                             float cosHN = std::max(0.0f, Vector3f::dot(H, N));
                             float cosHV = std::max(0.0f, Vector3f::dot(H, V));
@@ -370,7 +316,6 @@ Vector3f traceRay(const Ray &ray, float tmin, int depth, int maxDepth, ScenePars
                                 std::min(maxClamp, singleSampleContrib.y()),
                                 std::min(maxClamp, singleSampleContrib.z())
                             );
-                            
                             L_direct_accum += singleSampleContrib;
                         }
                     }
@@ -383,45 +328,60 @@ Vector3f traceRay(const Ray &ray, float tmin, int depth, int maxDepth, ScenePars
     if (!usePathTracing) {
         return L_direct * rrScale;
     } 
-    else {
+    else { // 💡 最终漫反射/Glossy 间接光路反弹分支
         float u1 = dis(gen); float u2 = dis(gen); float selectType = dis(gen); 
-        float p_diffuse = m->getDiffuseColor().length() / (m->getDiffuseColor().length() + m->getSpecularColor().length() + 1e-5f);
         
-        Vector3f nextDir; Vector3f brdf_val = Vector3f::ZERO; float pdf_val = 0.0f;
+        // 1. 基于材质色彩长度，计算两路通道的概率配额
+        float p_diffuse = m->getDiffuseColor().length() / (m->getDiffuseColor().length() + m->getSpecularColor().length() + 1e-5f);
+        float p_specular = 1.0f - p_diffuse;
+        
+        Vector3f nextDir; 
+        float pdf_val = 0.0f;
+        Vector3f brdf_val = Vector3f::ZERO;
 
+        // 丢硬币：决定【只发射一根】次级射线，防止光线发生指数级膨胀
         if (selectType < p_diffuse) {
-            nextDir = sampleHemisphere(N);
-            float cosThetaOut = std::max(0.0f, Vector3f::dot(N, nextDir));
-            pdf_val = (cosThetaOut / M_PI) * p_diffuse;
-            brdf_val = m->getDiffuseColor() / M_PI;
+            nextDir = sampleHemisphere(N); // 漫反射分支：余弦半球采样
         } 
         else {
-            Vector3f H_sampled = sampleGGXNormal(N, roughness, u1, u2);
+            Vector3f H_sampled = sampleGGXNormal(N, roughness, u1, u2); // 高光分支：GGX采样
             nextDir = (V - 2.0f * Vector3f::dot(V, H_sampled) * H_sampled).normalized();
-            float cosThetaOut = std::max(0.0f, Vector3f::dot(N, nextDir));
-            float cosViewN_s = std::max(0.0f, Vector3f::dot(N, V));
+        }
+
+        float cosThetaNext = std::max(0.0f, Vector3f::dot(N, nextDir));
+        float cosViewN_s = std::max(0.0f, Vector3f::dot(N, V));
+        
+        // 2. 联合多通道求和：计算全通道总概率密度 PDF
+        if (cosThetaNext > 0.0f && cosViewN_s > 0.0f) {
+            float pdf_diffuse_eval = cosThetaNext / M_PI;
             
-            if (cosThetaOut > 0.0f && cosViewN_s > 0.0f) {
-                float cosHN_s = std::max(0.0f, Vector3f::dot(H_sampled, N));
-                float cosHV_s = std::max(0.0f, Vector3f::dot(H_sampled, V));
+            Vector3f H_eval = (nextDir + V).normalized();
+            float pdf_specular_eval = pdfGGX(N, H_eval, V, roughness);
+            
+            // 💡 降噪安全刹车片：分母为双路概率联合加权和
+            pdf_val = pdf_diffuse_eval * p_diffuse + pdf_specular_eval * p_specular;
+            if (selectType < p_diffuse) {
+                // 摇中漫反射，分子只结算标准的 Lambert 漫反射项
+                brdf_val = m->getDiffuseColor() / M_PI;
+            } else {
+                // 摇中高光项，分子只结算标准的微表面 Cook-Torrance 项
+                float cosHN_s = std::max(0.0f, Vector3f::dot(H_eval, N));
+                float cosHV_s = std::max(0.0f, Vector3f::dot(H_eval, V));
                 float denomD = (cosHN_s * cosHN_s * (alpha2 - 1.0f) + 1.0f);
                 float D_val = alpha2 / (M_PI * denomD * denomD);
                 Vector3f F0 = m->getSpecularColor().length() > 1e-5 ? m->getSpecularColor() : Vector3f(0.04f);
                 Vector3f F = F0 + (Vector3f(1.0f) - F0) * powf(1.0f - cosHV_s, 5.0f);
+                
                 float k = (roughness + 1.0f) * (roughness + 1.0f) / 8.0f;
                 float g1 = cosViewN_s / (cosViewN_s * (1.0f - k) + k);
-                float g2 = cosThetaOut / (cosThetaOut * (1.0f - k) + k);
-                brdf_val = (D_val * F * g1 * g2) / (4.0f * cosViewN_s * cosThetaOut + 1e-4f);
-                pdf_val = pdfGGX(N, H_sampled, V, roughness) * (1.0f - p_diffuse);
+                float g2 = cosThetaNext / (cosThetaNext * (1.0f - k) + k);
+                
+                brdf_val = (D_val * F * g1 * g2) / (4.0f * cosViewN_s * cosThetaNext + 1e-4f);
             }
         }
 
+        // 3. 保持后续原有的求交、NEE面光源探测、MIS加权逻辑完全不动：
         Vector3f L_indirect = Vector3f::ZERO;
-        float cosThetaNext = std::max(0.0f, Vector3f::dot(N, nextDir));
-
-        // ===================================================================
-        // 💡 真正落地激活的无偏 MIS 路径解算内核
-        // ===================================================================
         if (pdf_val > 1e-5f && cosThetaNext > 0.0f) {
             Ray nextRay(p + N * 1e-3f, nextDir);
             Hit nextHit;
@@ -431,34 +391,27 @@ Vector3f traceRay(const Ray &ray, float tmin, int depth, int maxDepth, ScenePars
                 Material* nextMat = nextHit.getMaterial();
                 Vector3f nextEmission = nextMat->getEmission();
                 
-                // 递归探测间接光辐射度
                 Vector3f indirect_radiance = traceRay(nextRay, 1e-3f, depth + 1, maxDepth, sceneParser, false, true);
                 
-                // 💡 判断条件：如果这根间接光射线“意外”在天花板碰到了面光源
                 if (nextEmission.length() > 1e-6f && sceneParser.getNumLights() > 0) {
                     AreaLight* areaLight = dynamic_cast<AreaLight*>(sceneParser.getLight(0));
                     float mis_weight = 1.0f;
                     
                     if (areaLight != nullptr) {
-                        // 动态解算当前命中的面光源真实的几何 PDF 因子
                         Vector3f hitN_light = nextHit.getNormal().normalized();
                         float cosAlpha = std::max(0.0f, Vector3f::dot(-nextDir, hitN_light));
                         float lightDist2 = nextHit.getT() * nextHit.getT();
                         
-                        // 从场景动态计算面光源面积，绝不硬编码
                         Vector3f p00 = areaLight->getSamplePoint(0,0);
                         float lightArea = (areaLight->getSamplePoint(1,0) - p00).length() * (areaLight->getSamplePoint(0,1) - p00).length();
-                        
                         float pdf_light = (cosAlpha > 1e-5f) ? (lightDist2 / (lightArea * cosAlpha)) : 0.0f;
                         
-                        // 运用平衡启发式加权
                         if (pdf_val + pdf_light > 1e-6f) {
                             mis_weight = pdf_val / (pdf_val + pdf_light);
                         }
                     }
                     L_indirect = (brdf_val * indirect_radiance * cosThetaNext * mis_weight) / pdf_val;
                 } else {
-                    // 撞击普通不发光墙壁，维持原标准蒙特卡洛积分
                     L_indirect = (brdf_val * indirect_radiance * cosThetaNext) / pdf_val;
                 }
             }

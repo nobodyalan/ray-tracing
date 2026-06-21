@@ -1,5 +1,5 @@
 PerspectiveCamera {
-    center 0 1.5 7
+    center 0 1.5 6
     direction 0 -0.3 -1
     up 0 1 0
     angle 30
@@ -78,8 +78,8 @@ Group {
     Sphere { center  0.5 -0.5 -4.5 radius 0.35 }
 
     MaterialIndex 7
-    Sphere { center -1.2 -0.5 0 radius 0.35 }
+    Sphere { center -1.2 -0.5 -1 radius 0.35 }
     MaterialIndex 6
-    Sphere { center  1.2 -0.5 0 radius 0.35 }
+    Sphere { center  1.2 -0.5 -1 radius 0.35 }
 
 }
