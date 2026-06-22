@@ -74,6 +74,9 @@ public:
 
 		return false;
 	}
+	Vector3f getVertex(int i) const {
+        return vertices[i];
+    }
 
 protected:
 	Vector3f vertices[3];

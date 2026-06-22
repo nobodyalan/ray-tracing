@@ -1,10 +1,10 @@
 PerspectiveCamera {
-    center 0.35 0.6 0.8
-    direction -0.5 -0.5 -1
+    center 0.35 0.35 2.2
+    direction 0 0 -1
     up 0 1 0
-    angle 25
-    width 200
-    height 200
+    angle 30
+    width 800
+    height 800
 }
 
 Lights {
@@ -12,12 +12,12 @@ Lights {
     DirectionalLight {
         direction 0.2 -1 -0.4
 	    color 0.7 0.7 0.7
-        intensity 1
+        intensity 2
     }
     DirectionalLight {
         direction -7 -5 -5
 	    color 0.3 0.3 0.3
-        intensity 1
+        intensity 2
     }
 }
 

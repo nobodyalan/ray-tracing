@@ -9,22 +9,14 @@
 
 using namespace std;
 
-// 💡 辅助解析流：就地解析对应的 .mtl 文件，动态填充局部材质映射表
 static void parseMTL(const string& mtlPath, std::map<string, Material*>& mtlMap) {
-    ifstream f;
-    f.open(mtlPath);
+    ifstream f(mtlPath);
     if (!f.is_open()) {
-        // 自适应脚本路径重试 1：向前回溯一级探测
         string retryMtl = string("../") + mtlPath;
         f.open(retryMtl);
         if (!f.is_open()) {
-            // 自适应脚本路径重试 2：针对不 cd build 直接运行 sh run_all.sh 的情况，强行命中 testcases/
-            string scriptRetryMtl = string("testcases/") + mtlPath;
-            f.open(scriptRetryMtl);
-            if (!f.is_open()) {
-                cout << "Warning: Cannot open mtl file: " << mtlPath << endl;
-                return;
-            }
+            cout << "Warning: Cannot open mtl file: " << mtlPath << endl;
+            return;
         }
     }
 
@@ -80,15 +72,20 @@ static void parseMTL(const string& mtlPath, std::map<string, Material*>& mtlMap)
 }
 
 void Mesh::initialize(const char *filename) {
-    ifstream f;
+    ifstream f(filename);
+    printf("filename = %s\n", filename);
     string finalFilename = string(filename);
-    f.open(filename);
-    if (!f.is_open())
-    {
-        std::cout << "Cannot open " << filename << "\n";
-        return;
+    
+    if (!f.is_open()) {
+        string retryPath = string("../") + filename;
+        f.open(retryPath);
+        if (!f.is_open()) {
+            cout << "Cannot open OBJ file: " << filename << endl;
+            return;
+        }
+        finalFilename = retryPath;
     }
-    // 从最终成功打开的路径句柄中，动态、精准剥离当前网格物体所在的实际物理基准目录
+
     string baseDir = "";
     size_t lastSlash = finalFilename.find_last_of("/\\");
     if (lastSlash != string::npos) {
@@ -96,7 +93,6 @@ void Mesh::initialize(const char *filename) {
     }
 
     std::map<string, Material*> localMtlMap;
-    // 💡 核心修复：此时 this->material 已在构造函数中被安全赋值，activeMaterial 获得了完美的场景兜底色
     Material* activeMaterial = this->material; 
 
     string line;
@@ -140,7 +136,7 @@ void Mesh::initialize(const char *filename) {
 
                 int final_idx = 0;
                 if (raw_idx > 0) {
-                    final_idx = raw_idx - 1;
+                    final_idx = raw_idx - 1; 
                 } else if (raw_idx < 0) {
                     final_idx = (int)v.size() + raw_idx; 
                 }
@@ -154,19 +150,74 @@ void Mesh::initialize(const char *filename) {
                 t.v[2] = faceVertices[i + 1];
                 v_indices.push_back(t);
 
-                // 材质精准初次对齐绑定
                 Triangle* tri = new Triangle(v[t.v[0]], v[t.v[1]], v[t.v[2]], activeMaterial);
                 t_faces.push_back(tri);
             }
         }
     }
     f.close();
+
+    // 💡 加载完毕，单次编译生成 BVH 加速树
+    if (!t_faces.empty()) {
+        bvh_root = buildBVH(t_faces, 0, (int)t_faces.size());
+    }
+}
+
+// 💡 3. 完美适配：直接利用 Triangle 暴露出的顶点访问接口进行极速空间排序
+BVHNode* Mesh::buildBVH(std::vector<Triangle*>& tris, int start, int end) {
+    if (start >= end) return nullptr;
+
+    BVHNode* node = new BVHNode();
+    
+    // 运用你在 triangle.hpp 里新加的只读顶点接口直接合成 AABB 包围盒，开销降为真正的 O(1)
+    for (int i = start; i < end; ++i) {
+        node->box.integrate(tris[i]->getVertex(0)); // 👈 适配：直接调取顶点
+        node->box.integrate(tris[i]->getVertex(1));
+        node->box.integrate(tris[i]->getVertex(2));
+    }
+
+    int len = end - start;
+    if (len == 1) {
+        node->tri = tris[start];
+        return node;
+    }
+
+    // 选取包围盒跨度最长的轴
+    Vector3f extents = node->box.max_p - node->box.min_p;
+    int axis = 0;
+    if (extents[1] > extents[0]) axis = 1;
+    if (extents[2] > extents[axis]) axis = 2;
+
+    // 真正的 O(N log N) 空间中位数排序
+    std::sort(tris.begin() + start, tris.begin() + end, [axis](Triangle* a, Triangle* b) {
+        float centerA = (a->getVertex(0)[axis] + a->getVertex(1)[axis] + a->getVertex(2)[axis]) / 3.0f;
+        float centerB = (b->getVertex(0)[axis] + b->getVertex(1)[axis] + b->getVertex(2)[axis]) / 3.0f;
+        return centerA < centerB;
+    });
+
+    int mid = start + len / 2;
+    node->left = buildBVH(tris, start, mid);
+    node->right = buildBVH(tris, mid, end);
+
+    return node;
+}
+
+bool Mesh::intersectBVH(BVHNode* node, const Ray& r, Hit& h, float tmin) const {
+    if (node == nullptr) return false;
+    
+    // AABB 粗筛
+    if (!node->box.intersect(r, tmin, h.getT())) return false;
+
+    if (node->tri != nullptr) {
+        return node->tri->intersect(r, h, tmin);
+    }
+
+    bool hit_left = intersectBVH(node->left, r, h, tmin);
+    bool hit_right = intersectBVH(node->right, r, h, tmin);
+    return hit_left || hit_right;
 }
 
 bool Mesh::intersect(const Ray &r, Hit &h, float tmin) {
-    bool result = false;
-    for (int triIndex = 0; triIndex < (int)t_faces.size(); ++triIndex) {
-        result |= t_faces[triIndex]->intersect(r, h, tmin);
-    }
-    return result;
+    if (bvh_root == nullptr) return false;
+    return intersectBVH(bvh_root, r, h, tmin);
 }
