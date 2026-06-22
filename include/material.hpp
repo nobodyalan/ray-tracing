@@ -18,6 +18,15 @@ public:
     {
     }
     
+    // 💡 新增：默认构造函数，供解析 .mtl 时动态创建并用 set 赋值
+    Material() {
+        diffuseColor = Vector3f::ZERO;
+        specularColor = Vector3f::ZERO;
+        shininess = 0.0f;
+        indexOfRefraction = 1.0f; // 绝缘体默认折射率为 1.0
+        transparency = 0.0f;
+        emissionColor = Vector3f::ZERO;
+    }
     virtual ~Material() = default;
     
     virtual float getTransparency() const { return transparency; }
@@ -28,6 +37,13 @@ public:
     virtual float getShininess() const { return shininess; }
     virtual Vector3f getReflectiveColor() const { return reflectiveColor; }
     virtual float getRefractiveIndex() const { return indexOfRefraction; }
+
+    void setDiffuseColor(const Vector3f &color) { diffuseColor = color; }
+    void setSpecularColor(const Vector3f &color) { specularColor = color; }
+    void setShininess(float s) { shininess = s; }
+    void setRefractiveIndex(float r_idx) { indexOfRefraction = r_idx; }
+    void setTransparency(float t) { transparency = t; }
+    void setEmission(const Vector3f &e) { emissionColor = e; }
 
 protected:
     Vector3f diffuseColor;

@@ -4,33 +4,30 @@
 #include <vector>
 #include "object3d.hpp"
 #include "triangle.hpp"
-#include "Vector2f.h"
-#include "Vector3f.h"
-
+#include "material.hpp"
 
 class Mesh : public Object3D {
 
 public:
-    Mesh(const char *filename, Material *m);
+    // 💡 对齐构造函数
+    Mesh(const char *filename, Material *m) {
+        this->material = m;
+        initialize(filename);
+    }
 
-    struct TriangleIndex {
-        TriangleIndex() {
-            x[0] = 0; x[1] = 0; x[2] = 0;
-        }
-        int &operator[](const int i) { return x[i]; }
-        // By Computer Graphics convention, counterclockwise winding is front face
-        int x[3]{};
+    // 💡 对齐定义：让结构体名称和字段与 mesh.cpp 的 t.v[i] 严格一致
+    struct TriangleIndexed {
+        int v[3];
     };
 
     std::vector<Vector3f> v;
-    std::vector<TriangleIndex> t;
-    std::vector<Vector3f> n;
+    std::vector<TriangleIndexed> v_indices; // 存储顶点索引
+    std::vector<Triangle*> t_faces;         // 💡 新增对齐：存储真正实例化、带材质的三角形指针
+
     bool intersect(const Ray &r, Hit &h, float tmin) override;
 
 private:
-
-    // Normal can be used for light estimation
-    void computeNormal();
+    void initialize(const char *filename);
 };
 
 #endif

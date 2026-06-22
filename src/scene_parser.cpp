@@ -370,6 +370,7 @@ Object3D *SceneParser::parseObject(char token[MAX_PARSER_TOKEN_LENGTH]) {
     } else if (!strcmp(token, "Triangle")) {
         answer = (Object3D *) parseTriangle();
     } else if (!strcmp(token, "TriangleMesh")) {
+        cout<< 1 <<endl;
         answer = (Object3D *) parseTriangleMesh();
     } else if (!strcmp(token, "Transform")) {
         answer = (Object3D *) parseTransform();
@@ -499,7 +500,6 @@ Mesh *SceneParser::parseTriangleMesh() {
     const char *ext = &filename[strlen(filename) - 4];
     assert(!strcmp(ext, ".obj"));
     Mesh *answer = new Mesh(filename, current_material);
-
     return answer;
 }
 Cube *SceneParser::parseCube() {
