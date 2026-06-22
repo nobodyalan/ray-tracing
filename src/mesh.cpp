@@ -42,6 +42,10 @@ static void parseMTL(const string& mtlPath, std::map<string, Material*>& mtlMap)
                 float r, g, b; ss >> r >> g >> b;
                 currentMat->setDiffuseColor(Vector3f(r, g, b));
             } 
+            else if (token == "Ka") { 
+                float r, g, b; ss >> r >> g >> b;
+                currentMat->setAmbientColor(Vector3f(r, g, b));
+            }
             else if (token == "Ks") { 
                 float r, g, b; ss >> r >> g >> b;
                 currentMat->setSpecularColor(Vector3f(r, g, b));
@@ -65,6 +69,17 @@ static void parseMTL(const string& mtlPath, std::map<string, Material*>& mtlMap)
             else if (token == "Tr") { 
                 float tr_val; ss >> tr_val;
                 currentMat->setTransparency(tr_val);
+            }
+            else if (token == "map_Kd") {
+                string texPath;
+                ss >> texPath; // 读入图片相对路径，例如 "tex/武器.tga"
+                
+                // 根据当前 .mtl 文件的物理路径，拼装出贴图文件的正确绝对/相对路径
+                size_t lastSlash = mtlPath.find_last_of("/\\");
+                string baseDir = (lastSlash != string::npos) ? mtlPath.substr(0, lastSlash + 1) : "";
+                
+                // 👇 触发调用：一键调用你修改好的材质类加载接口，让硬盘里的 TGA 资源扎进内存
+                currentMat->loadTexture(baseDir + texPath);
             }
         }
     }
@@ -121,40 +136,50 @@ void Mesh::initialize(const char *filename) {
             ss >> x >> y >> z;
             v.push_back(Vector3f(x, y, z));
         } 
+        else if (token == "vt"){
+            float x,y;
+            ss>>x>>y;
+            vt.push_back(Vector2f(x,y));
+        }
+        else if (token == "vn"){
+            float x,y,z;
+            ss>>x>>y>>z;
+            vn.push_back(Vector3f(x,y,z));
+        }
         else if (token == "f") {
-            string vertexToken;
-            vector<int> faceVertices;
-
-            while (ss >> vertexToken) {
-                size_t firstSlash = vertexToken.find('/');
-                int raw_idx = 0;
-                if (firstSlash == string::npos) {
-                    raw_idx = atoi(vertexToken.c_str());
-                } else {
-                    raw_idx = atoi(vertexToken.substr(0, firstSlash).c_str());
+            string vToken;
+            vector<int> v_idx, vt_idx, vn_idx;
+            while (ss >> vToken) {
+                int vi = 0, vti = 0, vni = 0;
+                // 💡 核心健壮性：依次尝试匹配三种不同精细度的索引格式
+                if (sscanf(vToken.c_str(), "%d/%d/%d", &vi, &vti, &vni) == 3) {
+                    v_idx.push_back(vi > 0 ? vi - 1 : (int)v.size() + vi);
+                    vt_idx.push_back(vti > 0 ? vti - 1 : (int)vt.size() + vti);
+                    vn_idx.push_back(vni > 0 ? vni - 1 : (int)vn.size() + vni);
+                } else if (sscanf(vToken.c_str(), "%d/%d", &vi, &vti) == 2) {
+                    v_idx.push_back(vi > 0 ? vi - 1 : (int)v.size() + vi);
+                    vt_idx.push_back(vti > 0 ? vti - 1 : (int)vt.size() + vti);
+                } else if (sscanf(vToken.c_str(), "%d", &vi) == 1) {
+                    v_idx.push_back(vi > 0 ? vi - 1 : (int)v.size() + vi);
                 }
-
-                int final_idx = 0;
-                if (raw_idx > 0) {
-                    final_idx = raw_idx - 1; 
-                } else if (raw_idx < 0) {
-                    final_idx = (int)v.size() + raw_idx; 
-                }
-                faceVertices.push_back(final_idx);
             }
 
-            for (size_t i = 1; i < faceVertices.size() - 1; ++i) {
-                TriangleIndexed t;
-                t.v[0] = faceVertices[0];
-                t.v[1] = faceVertices[i];
-                t.v[2] = faceVertices[i + 1];
-                v_indices.push_back(t);
-
-                Triangle* tri = new Triangle(v[t.v[0]], v[t.v[1]], v[t.v[2]], activeMaterial);
+            // 扇形三角化：将多边形转为三角形
+            for (size_t i = 1; i < v_idx.size() - 1; ++i) {
+                Triangle* tri;
+                if (!vt_idx.empty()) {
+                    // 💡 适配：使用带 UV 的构造函数
+                    tri = new Triangle(v[v_idx[0]], v[v_idx[i]], v[v_idx[i+1]],
+                                       vt[vt_idx[0]], vt[vt_idx[i]], vt[vt_idx[i+1]], activeMaterial);
+                } else {
+                    tri = new Triangle(v[v_idx[0]], v[v_idx[i]], v[v_idx[i+1]], activeMaterial);
+                }
+                if (!vn_idx.empty()) tri->setNormal(vn[vn_idx[0]]); // 简单绑定法线
                 t_faces.push_back(tri);
             }
         }
     }
+    
     f.close();
 
     // 💡 加载完毕，单次编译生成 BVH 加速树

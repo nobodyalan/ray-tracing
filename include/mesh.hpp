@@ -81,7 +81,17 @@ public:
     std::vector<Vector3f> v;
     std::vector<TriangleIndexed> v_indices;
     std::vector<Triangle*> t_faces;
-
+    std::vector<Vector2f> vt; 
+    // 💡 新增：法线账本
+    std::vector<Vector3f> vn;
+    // 💡 修正：索引账本需要能同时记录 v, vt, vn 的索引
+    // 因为 obj 文件中，一个顶点可能对应不同的纹理坐标或法线
+    struct FaceIndex {
+        int v_idx[3];
+        int vt_idx[3];
+        int vn_idx[3];
+    };
+    std::vector<FaceIndex> faces;
     BVHNode* bvh_root = nullptr; // BVH 根节点指针
 
     bool intersect(const Ray &r, Hit &h, float tmin) override;

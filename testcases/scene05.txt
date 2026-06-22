@@ -1,5 +1,5 @@
 PerspectiveCamera {
-    center 0.35 0.35 2.2
+    center 0 1 4
     direction 0 0 -1
     up 0 1 0
     angle 30
@@ -8,21 +8,26 @@ PerspectiveCamera {
 }
 
 Lights {
-    numLights 2
+    numLights 3
     DirectionalLight {
         direction 0.2 -1 -0.4
 	    color 0.7 0.7 0.7
-        intensity 2
+        intensity 1
     }
     DirectionalLight {
         direction -7 -5 -5
 	    color 0.3 0.3 0.3
         intensity 2
     }
+    DirectionalLight {
+        direction 0 0 -1
+	    color 0.3 0.3 0.3
+        intensity 2
+    }
 }
 
 Background {
-    color 0.1 0.7 0.2
+    color 0 0 1
 }
 
 Materials {
@@ -38,7 +43,7 @@ Group {
     numObjects 1
     MaterialIndex 0
     TriangleMesh {
-        obj_file mesh/niko.obj
+        obj_file mesh/nikocharacter.obj
     }
 }
 

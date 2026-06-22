@@ -84,8 +84,39 @@ Vector3f traceRay(const Ray &ray, float tmin, int depth, int maxDepth, ScenePars
 {
     Hit hit; 
     Group *baseGroup = sceneParser.getGroup();
-    bool isIntersect = baseGroup->intersect(ray, hit, tmin);
-    
+    Ray currentRay = ray;
+    float currentTmin = tmin;
+    bool isIntersect = false;
+
+    // 💡 1. 健壮穿透求交循环：完美过滤半透明/空白外壳
+    while (true) {
+        hit = Hit(); 
+        isIntersect = baseGroup->intersect(currentRay, hit, currentTmin);
+        if (!isIntersect) break; 
+
+        Material *m = hit.getMaterial();
+        Vector2f raw_uv = hit.getUV();
+
+        // 内部防越界安全卡位测试
+        float su = fmod(raw_uv.x(), 1.0f); if (su < 0.0f) su += 1.0f;
+        float sv = fmod(raw_uv.y(), 1.0f); if (sv < 0.0f) sv += 1.0f;
+        
+
+        Vector3f texColor = m->getDiffuseColor(su, sv);
+
+        // 透明判定守卫（Alpha Cutout）：如果材质全透，或者贴图踩中纯黑/纯白纯留白
+        bool isTransparentPatch = (m->getTransparency() > 0.8f) || 
+                                  (texColor.length() < 1e-3f) || 
+                                  ((Vector3f(1.0f) - texColor).length() < 1e-3f);
+
+        if (isTransparentPatch) {
+            currentTmin = 5e-3f;
+            currentRay = Ray(currentRay.pointAtParameter(hit.getT()), currentRay.getDirection());
+            continue; 
+        }
+        break; 
+    }
+
     if (!isIntersect || hit.getT() > 20.0f)
     {
         return sceneParser.getBackgroundColor();
@@ -110,9 +141,18 @@ Vector3f traceRay(const Ray &ray, float tmin, int depth, int maxDepth, ScenePars
     Vector3f D = ray.getDirection().normalized(); 
     Vector3f V = -D; 
     Vector3f p = ray.pointAtParameter(hit.getT());
-
-    Vector3f emission = m->getEmission();
     
+    // ===================================================================
+    // 💡 核心修复：对最终传递给整个 PBR 管线的 UV 坐标进行强制安全防护绑定
+    // ===================================================================
+    Vector2f final_uv = hit.getUV();
+    float safe_u = fmod(final_uv.x(), 1.0f); if (safe_u < 0.0f) safe_u += 1.0f;
+    float safe_v = fmod(final_uv.y(), 1.0f); if (safe_v < 0.0f) safe_v += 1.0f;
+    Vector3f emission = m->getEmission();
+    Vector3f N_diffuse = N;
+    if (Vector3f::dot(D, N_diffuse) > 0.0f) {
+        N_diffuse = -N_diffuse; // 只在此变量上应用双面迎向翻转，使双面都能进行漫反射和自发光染色
+    }
     bool hitRealLightPatch = false;
     if (emission.length() > 1e-6f) {
         for (int i = 0; i < sceneParser.getNumLights(); ++i) {
@@ -122,10 +162,10 @@ Vector3f traceRay(const Ray &ray, float tmin, int depth, int maxDepth, ScenePars
                 Vector3f d1 = areaLight->getSamplePoint(1, 0) - p00;
                 Vector3f d2 = areaLight->getSamplePoint(0, 1) - p00;
                 
-                float u = Vector3f::dot(p - p00, d1) / d1.squaredLength();
-                float v = Vector3f::dot(p - p00, d2) / d2.squaredLength();
+                float u_l = Vector3f::dot(p - p00, d1) / d1.squaredLength();
+                float v_l = Vector3f::dot(p - p00, d2) / d2.squaredLength();
                 
-                if (u >= 0.0f && u <= 1.0f && v >= 0.0f && v <= 1.0f) {
+                if (u_l >= 0.0f && u_l <= 1.0f && v_l >= 0.0f && v_l <= 1.0f) {
                     hitRealLightPatch = true;
                     break;
                 }
@@ -146,9 +186,6 @@ Vector3f traceRay(const Ray &ray, float tmin, int depth, int maxDepth, ScenePars
     bool isReflective = (reflectiveColor.length() > 1e-6);
     bool isRefractive = (std::abs(refractiveIndex - 1.0f) > 1e-6);
 
-    // ===================================================================
-    // 2.1 物理完全体：基于你原本正常的经典 Ideal Refraction 架构
-    // ===================================================================
     if (isRefractive) {
         float dotDN = Vector3f::dot(D, N);
         bool leaving = (dotDN > 0.0f); 
@@ -158,7 +195,7 @@ Vector3f traceRay(const Ray &ray, float tmin, int depth, int maxDepth, ScenePars
         float ratio = n_i / n_t;
 
         Vector3f Ng = leaving ? -N : N;
-        float cos_i = std::abs(Vector3f::dot(D, N)); // 绝对值保护
+        float cos_i = std::abs(Vector3f::dot(D, N)); 
         float sin2_t = ratio * ratio * (1.0f - cos_i * cos_i);
         float cos_t = (sin2_t <= 1.0f) ? sqrt(1.0f - sin2_t) : 0.0f;
         
@@ -166,7 +203,8 @@ Vector3f traceRay(const Ray &ray, float tmin, int depth, int maxDepth, ScenePars
         float Fr = R0 + (1.0f - R0) * powf(1.0f - cos_i, 5.0f);
         Fr = new_clamp(Fr, 0.0f, 1.0f);
 
-        Vector3f transmissionColor = m->getDiffuseColor(); 
+        // 💡 升级：传入全安全的归一化循环 UV 坐标
+        Vector3f transmissionColor = m->getDiffuseColor(safe_u, safe_v);
         float transFactor = m->getTransparency();
 
         Vector3f L_specular_nee = Vector3f::ZERO;
@@ -195,7 +233,6 @@ Vector3f traceRay(const Ray &ray, float tmin, int depth, int maxDepth, ScenePars
                         
                         float h_refIdx = shadowHit.getMaterial()->getRefractiveIndex();
                         if (std::abs(h_refIdx - 1.0f) > 1e-6) {
-                            // 💡 职责分离优化落地：直接光阴影射线对玻璃 100% 滤光放行，彻底消灭同侧大面积硬黑斑
                             shadowAttenuation = shadowAttenuation * shadowHit.getMaterial()->getDiffuseColor();
                             shadowRayOrigin = shadowRay.pointAtParameter(shadowHit.getT() + 5e-3f);
                         }
@@ -231,9 +268,6 @@ Vector3f traceRay(const Ray &ray, float tmin, int depth, int maxDepth, ScenePars
             return (indirect * attenuation) * rrScale;
         }
     }
-    // ===================================================================
-    // 2.2 理想纯全反射不透明金属介质（处理金属反射球）
-    // ===================================================================
     else if (isReflective) {
         Vector3f R = (D - 2.0f * Vector3f::dot(D, N) * N).normalized();
         Vector3f offsetP = p + R * 5e-3f;
@@ -242,7 +276,7 @@ Vector3f traceRay(const Ray &ray, float tmin, int depth, int maxDepth, ScenePars
     }
 
     // ===================================================================
-    // 3. 漫反射 / 粗糙微表面（Glossy）着色计算 (退回原本最安全的单路估计器)
+    // 3. 漫反射 / 粗糙微表面（Glossy）着色计算
     // ===================================================================
     Vector3f L_direct = Vector3f::ZERO;
     float roughness = new_clamp(1.0f - (m->getShininess() / 100.0f), 0.05f, 1.0f);
@@ -259,17 +293,17 @@ Vector3f traceRay(const Ray &ray, float tmin, int depth, int maxDepth, ScenePars
 
         for (int lx = 0; lx < lightSamplesX; ++lx) {
             for (int ly = 0; ly < lightSamplesY; ++ly) {
-                float u = ((float)lx + dis(gen)) / (float)lightSamplesX;
-                float v = ((float)ly + dis(gen)) / (float)lightSamplesY;
+                float u_s = ((float)lx + dis(gen)) / (float)lightSamplesX;
+                float v_s = ((float)ly + dis(gen)) / (float)lightSamplesY;
                 
                 Vector3f L_dir; Vector3f radianceFactor; float dist;
                 
-                if (light->sampleNEE(p, N, u, v, L_dir, radianceFactor, dist)) {
-                    float cosThetaP = Vector3f::dot(N, L_dir);
+                if (light->sampleNEE(p, N, u_s, v_s, L_dir, radianceFactor, dist)) {
+                    float cosThetaP = Vector3f::dot(N_diffuse, L_dir);
                     float cosViewN  = std::max(0.0f, Vector3f::dot(N, V)); 
                     
                     if (cosThetaP > 0.0f && cosViewN > 0.0f) {
-                        Vector3f shadowRayOrigin = p + N * 5e-3f; 
+                        Vector3f shadowRayOrigin = p + N_diffuse * 5e-3f; 
                         Vector3f shadowRayDir = L_dir;             
                         Vector3f shadowAttenuation = Vector3f(1.0f); 
                         Vector3f realLightPos = p + L_dir * dist; 
@@ -285,7 +319,6 @@ Vector3f traceRay(const Ray &ray, float tmin, int depth, int maxDepth, ScenePars
                             
                             float hitRefractiveIndex = shadowHit.getMaterial()->getRefractiveIndex();
                             if (std::abs(hitRefractiveIndex - 1.0f) > 1e-6) {
-                                // 💡 漫反射地面上的直接光采样，也同步拉齐对玻璃的职责分离饱满放行
                                 shadowAttenuation = shadowAttenuation * shadowHit.getMaterial()->getDiffuseColor();
                                 shadowRayOrigin = shadowRay.pointAtParameter(shadowHit.getT() + 5e-3f);
                             }
@@ -295,7 +328,8 @@ Vector3f traceRay(const Ray &ray, float tmin, int depth, int maxDepth, ScenePars
                         }
 
                         if (shadowAttenuation.length() > 1e-5f) {
-                            Vector3f fr_diffuse = m->getDiffuseColor() / M_PI; 
+                            // 💡 升级：直接光照漫反射采集使用全安全归一化坐标 safe_u, safe_v
+                            Vector3f fr_diffuse = m->getDiffuseColor(safe_u, safe_v) / M_PI;
                             Vector3f H = (L_dir + V).normalized();
                             float cosHN = std::max(0.0f, Vector3f::dot(H, N));
                             float cosHV = std::max(0.0f, Vector3f::dot(H, V));
@@ -328,10 +362,9 @@ Vector3f traceRay(const Ray &ray, float tmin, int depth, int maxDepth, ScenePars
     if (!usePathTracing) {
         return L_direct * rrScale;
     } 
-    else { // 💡 最终漫反射/Glossy 间接光路反弹分支
+    else { 
         float u1 = dis(gen); float u2 = dis(gen); float selectType = dis(gen); 
         
-        // 1. 基于材质色彩长度，计算两路通道的概率配额
         float p_diffuse = m->getDiffuseColor().length() / (m->getDiffuseColor().length() + m->getSpecularColor().length() + 1e-5f);
         float p_specular = 1.0f - p_diffuse;
         
@@ -339,32 +372,28 @@ Vector3f traceRay(const Ray &ray, float tmin, int depth, int maxDepth, ScenePars
         float pdf_val = 0.0f;
         Vector3f brdf_val = Vector3f::ZERO;
 
-        // 丢硬币：决定【只发射一根】次级射线，防止光线发生指数级膨胀
         if (selectType < p_diffuse) {
-            nextDir = sampleHemisphere(N); // 漫反射分支：余弦半球采样
+            nextDir = sampleHemisphere(N_diffuse); 
         } 
         else {
-            Vector3f H_sampled = sampleGGXNormal(N, roughness, u1, u2); // 高光分支：GGX采样
+            Vector3f H_sampled = sampleGGXNormal(N, roughness, u1, u2); 
             nextDir = (V - 2.0f * Vector3f::dot(V, H_sampled) * H_sampled).normalized();
         }
-
-        float cosThetaNext = std::max(0.0f, Vector3f::dot(N, nextDir));
-        float cosViewN_s = std::max(0.0f, Vector3f::dot(N, V));
+        Vector3f targetNormal = (selectType < p_diffuse) ? N_diffuse : N;
+        float cosThetaNext = std::max(0.0f, Vector3f::dot(targetNormal, nextDir));
+        float cosViewN_s = std::max(0.0f, Vector3f::dot(targetNormal, V));
         
-        // 2. 联合多通道求和：计算全通道总概率密度 PDF
         if (cosThetaNext > 0.0f && cosViewN_s > 0.0f) {
             float pdf_diffuse_eval = cosThetaNext / M_PI;
             
             Vector3f H_eval = (nextDir + V).normalized();
             float pdf_specular_eval = pdfGGX(N, H_eval, V, roughness);
             
-            // 💡 降噪安全刹车片：分母为双路概率联合加权和
             pdf_val = pdf_diffuse_eval * p_diffuse + pdf_specular_eval * p_specular;
             if (selectType < p_diffuse) {
-                // 摇中漫反射，分子只结算标准的 Lambert 漫反射项
-                brdf_val = m->getDiffuseColor() / M_PI;
+                // 💡 升级：间接漫反射反射分子采集同样使用全安全坐标 safe_u, safe_v
+                brdf_val = m->getDiffuseColor(safe_u, safe_v) / M_PI;
             } else {
-                // 摇中高光项，分子只结算标准的微表面 Cook-Torrance 项
                 float cosHN_s = std::max(0.0f, Vector3f::dot(H_eval, N));
                 float cosHV_s = std::max(0.0f, Vector3f::dot(H_eval, V));
                 float denomD = (cosHN_s * cosHN_s * (alpha2 - 1.0f) + 1.0f);
@@ -380,10 +409,9 @@ Vector3f traceRay(const Ray &ray, float tmin, int depth, int maxDepth, ScenePars
             }
         }
 
-        // 3. 保持后续原有的求交、NEE面光源探测、MIS加权逻辑完全不动：
         Vector3f L_indirect = Vector3f::ZERO;
         if (pdf_val > 1e-5f && cosThetaNext > 0.0f) {
-            Ray nextRay(p + N * 1e-3f, nextDir);
+            Ray nextRay(p + targetNormal * 1e-3f, nextDir);
             Hit nextHit;
             bool isNextIntersect = baseGroup->intersect(nextRay, nextHit, 1e-3f);
             
@@ -416,7 +444,9 @@ Vector3f traceRay(const Ray &ray, float tmin, int depth, int maxDepth, ScenePars
                 }
             }
         }
-        return (L_direct + L_indirect) * rrScale;
+        Vector3f L_ambient = m->getAmbientColor() * 0.15f; 
+        // 联合结算：物理光路辐射度 + 动漫环境固有底色
+        return (L_direct + L_indirect) * rrScale + L_ambient;
     }
 }
 

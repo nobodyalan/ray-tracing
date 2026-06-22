@@ -1,7 +1,8 @@
     #include <cstdlib>
 #include <cstdio>
 #include <cstring>
-
+#include <fstream>
+#include <iostream>
 #include "image.hpp"
 
 // some helper functions for save & load
@@ -81,6 +82,7 @@ Image* Image::LoadTGA(const char *filename) {
     const char *ext = &filename[strlen(filename)-4];
     assert(!strcmp(ext,".tga"));
     FILE *file = fopen(filename,"rb");
+
     // misc header information
     int width = 0;
     int height = 0;

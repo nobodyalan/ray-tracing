@@ -81,6 +81,7 @@ public:
     int SaveBMP(const char *filename);
 
     void SaveImage(const char *filename);
+    static Image *LoadBMP(const char *filename);
 
 private:
     int width;

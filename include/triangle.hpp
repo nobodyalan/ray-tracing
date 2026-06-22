@@ -21,11 +21,33 @@ public:
 		vertices[0] = a;
 		vertices[1] = b;
 		vertices[2] = c;
+		uvs[0] = uvs[1] = uvs[2] = Vector2f::ZERO; // 默认初始化为0
+		has_uv = false;                            // 标记没有材质贴图坐标
 		normal = Vector3f::cross(vertices[1] - vertices[0], vertices[2] - vertices[0]).normalized();
 	}
+
+	// 💡 增量重载：支持接收 3 个顶点 UV 坐标的全新构造函数，供带有纹理贴图的高模网格使用
+	Triangle(const Vector3f &a, const Vector3f &b, const Vector3f &c,
+			 const Vector2f &uv0, const Vector2f &uv1, const Vector2f &uv2, Material *m) : Object3D(m)
+	{
+		vertices[0] = a;
+		vertices[1] = b;
+		vertices[2] = c;
+		uvs[0] = uv0;
+		uvs[1] = uv1;
+		uvs[2] = uv2;
+		has_uv = true;                             // 标记持有有效的纹理贴图坐标
+		normal = Vector3f::cross(vertices[1] - vertices[0], vertices[2] - vertices[0]).normalized();
+	}
+
 	void setNormal(const Vector3f &n)
 	{
 		normal = n;
+	}
+
+	Vector3f getVertex(int idx) const
+	{
+		return vertices[idx];
 	}
 
 	bool intersect(const Ray &ray, Hit &hit, float tmin) override
@@ -69,18 +91,22 @@ public:
 				tempnormal = -tempnormal;
 			}
 			hit.set(t, material, tempnormal);
+
+			if (has_uv) {
+				float w = 1.0f - u - v; // 计算第三个顶点的插值权重
+				Vector2f interpolatedUV = w * uvs[0] + u * uvs[1] + v * uvs[2];
+				hit.setUV(interpolatedUV); 
+			}
+
 			return true;
 		}
-
 		return false;
 	}
-	Vector3f getVertex(int i) const {
-        return vertices[i];
-    }
 
 protected:
 	Vector3f vertices[3];
+	Vector2f uvs[3];       // 💡 新增：存放三个顶点各自对应的 2D 纹理贴图坐标
 	Vector3f normal;
+	bool has_uv = false;   // 💡 新增：标记当前面片是否带有 UV
 };
-
 #endif // TRIANGLE_H
