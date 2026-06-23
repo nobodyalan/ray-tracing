@@ -1,0 +1,24 @@
+# Blender 5.1.2 MTL File: 'None'
+# www.blender.org
+
+newmtl NPC_Others_GiantDodoco_Alice_01_Quest_Body_Mat
+Ns 0.000000
+Ka 1.000000 1.000000 1.000000
+Kd 1.000000 1.000000 1.000000
+Ks 0.500000 0.500000 0.500000
+Ke 0.000000 0.000000 0.000000
+Ni 1.000000
+d 1.000000
+illum 2
+map_Kd tex/NPC_Others_GiantDodoco_Alice_01_Body_Tex_Diffuse.tga
+
+newmtl NPC_Others_GiantDodoco_Alice_01_Quest_Hat_Mat
+Ns 0.000000
+Ka 1.000000 1.000000 1.000000
+Kd 1.000000 1.000000 1.000000
+Ks 0.500000 0.500000 0.500000
+Ke 0.000000 0.000000 0.000000
+Ni 1.000000
+d 1.000000
+illum 2
+map_Kd tex/NPC_Others_GiantDodoco_01_Hat_Tex_Diffuse.tga

@@ -1,8 +1,8 @@
 PerspectiveCamera {
-    center 0 1.3 5
-    direction 0 -0.1 -1
+    center 0.8 1.3 5
+    direction -0.1 -0.12 -1
     up 0 1 0
-    angle 30
+    angle 35
     width 800
     height 800
 }
@@ -17,10 +17,10 @@ Lights {
         intensity 6
     }
     SpotLight {
-        position 0 1.3 10
-        direction 0 0 -1
+        position 0 1.5 8
+        direction 0 -0.1 -1
         color 1 1 1
-        intensity 10
+        intensity 7
         innerAngle 20
         outerAngle 8
     }
@@ -52,7 +52,7 @@ Materials {
       shininess 25
     }
     Material { 
-      diffuseColor 1 1 0.2 
+      diffuseColor 0.2 1 1 
       specularColor 0.4 0.4 0.4
       shininess 10
       reflectiveColor 0.3 0.3 0.5
@@ -100,10 +100,13 @@ Materials {
 }
 
 Group {
-    numObjects 8
+    numObjects 13
     MaterialIndex 0
-    TriangleMesh {
-        obj_file mesh/nikocharacter.obj
+    Transform {
+        Translate 0 0 -1
+        TriangleMesh {
+            obj_file mesh/nikocharacter.obj
+        }
     }
     MaterialIndex 0
     Transform {
@@ -111,6 +114,24 @@ Group {
         Scale 0.8 0.8 0.8
         TriangleMesh {
             obj_file mesh/niko.obj
+        }
+    }
+    MaterialIndex 0
+    Transform {
+        Translate -1 0.05 0
+        Scale 0.8 0.8 0.8
+        YRotate 45
+        TriangleMesh {
+            obj_file mesh/nikeduduke.obj
+        }
+    }
+    MaterialIndex 0
+    Transform {
+        Translate 1 0.05 0
+        Scale 0.8 0.8 0.8
+        YRotate -45
+        TriangleMesh {
+            obj_file mesh/aliceduduke.obj
         }
     }
     MaterialIndex 12
@@ -138,9 +159,29 @@ Group {
         normal 0 0 1
         offset -4
     }
+    MaterialIndex 6
+    Plane {
+        normal 0 0 1
+        offset 10
+    }
     MaterialIndex 10
     Plane {
         normal 0 1 0
         offset 3
     }
+    MaterialIndex 4
+    Transform {
+        Translate -0.8 0 0.8
+        YRotate 30
+        Cube {
+            min_p -0.5 0 -0.125
+            max_p 0.5 1 0.125
+        }
+    }
+    MaterialIndex 2
+    Cube {
+        min_p -0.5 0 -2.99
+        max_p 0.5 2 -2.9
+    }
+
 }
