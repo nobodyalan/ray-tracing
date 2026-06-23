@@ -73,7 +73,6 @@ static void parseMTL(const string& mtlPath, std::map<string, Material*>& mtlMap)
             else if (token == "map_Kd") {
                 string texPath;
                 ss >> texPath; // 读入图片相对路径，例如 "tex/武器.tga"
-                
                 // 根据当前 .mtl 文件的物理路径，拼装出贴图文件的正确绝对/相对路径
                 size_t lastSlash = mtlPath.find_last_of("/\\");
                 string baseDir = (lastSlash != string::npos) ? mtlPath.substr(0, lastSlash + 1) : "";
@@ -151,7 +150,6 @@ void Mesh::initialize(const char *filename) {
             vector<int> v_idx, vt_idx, vn_idx;
             while (ss >> vToken) {
                 int vi = 0, vti = 0, vni = 0;
-                // 💡 核心健壮性：依次尝试匹配三种不同精细度的索引格式
                 if (sscanf(vToken.c_str(), "%d/%d/%d", &vi, &vti, &vni) == 3) {
                     v_idx.push_back(vi > 0 ? vi - 1 : (int)v.size() + vi);
                     vt_idx.push_back(vti > 0 ? vti - 1 : (int)vt.size() + vti);
@@ -163,24 +161,84 @@ void Mesh::initialize(const char *filename) {
                     v_idx.push_back(vi > 0 ? vi - 1 : (int)v.size() + vi);
                 }
             }
-
-            // 扇形三角化：将多边形转为三角形
-            for (size_t i = 1; i < v_idx.size() - 1; ++i) {
-                Triangle* tri;
-                if (!vt_idx.empty()) {
-                    // 💡 适配：使用带 UV 的构造函数
-                    tri = new Triangle(v[v_idx[0]], v[v_idx[i]], v[v_idx[i+1]],
-                                       vt[vt_idx[0]], vt[vt_idx[i]], vt[vt_idx[i+1]], activeMaterial);
+            if (v_idx.size() == 3) {
+                // 💡 方案 B 核心：在这里不做任何查重拦截，只进行极速“盲读”加载
+                Triangle* tri = nullptr;
+                if (!vt_idx.empty() && !vn_idx.empty()) {
+                    tri = new Triangle(v[v_idx[0]], v[v_idx[1]], v[v_idx[2]], vt[vt_idx[0]], vt[vt_idx[1]], vt[vt_idx[2]], vn[vn_idx[0]], vn[vn_idx[1]], vn[vn_idx[2]], activeMaterial);
+                } else if (!vt_idx.empty()) {
+                    tri = new Triangle(v[v_idx[0]], v[v_idx[1]], v[v_idx[2]], vt[vt_idx[0]], vt[vt_idx[1]], vt[vt_idx[2]], activeMaterial);
                 } else {
-                    tri = new Triangle(v[v_idx[0]], v[v_idx[i]], v[v_idx[i+1]], activeMaterial);
+                    tri = new Triangle(v[v_idx[0]], v[v_idx[1]], v[v_idx[2]], activeMaterial);
                 }
-                if (!vn_idx.empty()) tri->setNormal(vn[vn_idx[0]]); // 简单绑定法线
+                
                 t_faces.push_back(tri);
+            } 
+            else {
+                assert(v_idx.size() == 3);
             }
         }
     }
     
     f.close();
+    std::cout << ">> [Mesh Clean] Entering global geometric sorting for " << t_faces.size() << " triangles..." << std::endl;
+
+    std::cout << ">> [Mesh Clean] Entering global geometric sorting for " << t_faces.size() << " triangles..." << std::endl;
+
+    // 1. 高性能内存连续快排
+    std::sort(t_faces.begin(), t_faces.end(), [](Triangle* a, Triangle* b) {
+        Vector3f ca = (a->getVertex(0) + a->getVertex(1) + a->getVertex(2)) / 3.0f;
+        Vector3f cb = (b->getVertex(0) + b->getVertex(1) + b->getVertex(2)) / 3.0f;
+        
+        if (fabs(ca.x() - cb.x()) > 1e-5f) return ca.x() < cb.x();
+        if (fabs(ca.y() - cb.y()) > 1e-5f) return ca.y() < cb.y();
+        return ca.z() < cb.z();
+    });
+
+    // 2. 双指针线性扫描合并
+    std::vector<Triangle*> optimized_faces;
+    int deduplicated_count = 0;
+
+    if (!t_faces.empty()) {
+        optimized_faces.push_back(t_faces[0]); 
+
+        for (size_t i = 1; i < t_faces.size(); ++i) {
+            Triangle* curr = t_faces[i];
+            Triangle* prev = optimized_faces.back(); 
+
+            Vector3f cc = (curr->getVertex(0) + curr->getVertex(1) + curr->getVertex(2)) / 3.0f;
+            Vector3f cp = (prev->getVertex(0) + prev->getVertex(1) + prev->getVertex(2)) / 3.0f;
+
+            if ((cc - cp).length() < 1e-5f) {
+                Material* baseMat = prev->getMaterial();
+                Material* activeMaterial = curr->getMaterial();
+
+                if (baseMat != nullptr && activeMaterial != nullptr && baseMat != activeMaterial) {
+                    if (baseMat->getSecondaryMaterial() == nullptr) {
+                        baseMat->setSecondaryMaterial(activeMaterial);
+                    }
+                }
+                
+                // 🟢 核心修改：绝对不在原地调用 delete curr！
+                // 我们直接将这个重复面片【留在原来的 t_faces 垃圾池】里用于生命周期闭环，
+                // 但坚决不把它放进生存区，使其对后面的 BVH 树和求交光线而言彻底隐形、绝不参与计算！
+                deduplicated_count++;
+            } 
+            else {
+                optimized_faces.push_back(curr);
+            }
+        }
+    }
+
+    // 💡 3. 核心解耦：建立一个类内或生命周期同等的延时垃圾池
+    // 为了防止析构函数循环释放，我们在 Mesh 内部只用 optimized_faces 交付渲染
+    this->t_faces = optimized_faces;
+
+    std::cout << ">> [Mesh Optimization] Globally filtered out " << deduplicated_count 
+              << " disordered duplicate triangles! Remaining: " << this->t_faces.size() << std::endl;
+    // 接下来可以放心地去构建你的 BVH 树了：
+    // bvh_root = buildBVH(t_faces, 0, t_faces.size());
+    // 💡 加载完毕，单次编译生成 BVH 加速树
 
     // 💡 加载完毕，单次编译生成 BVH 加速树
     if (!t_faces.empty()) {

@@ -18,28 +18,36 @@ public:
 	// a b c are three vertex positions of the triangle
 	Triangle(const Vector3f &a, const Vector3f &b, const Vector3f &c, Material *m) : Object3D(m)
 	{
-		vertices[0] = a;
-		vertices[1] = b;
-		vertices[2] = c;
-		uvs[0] = uvs[1] = uvs[2] = Vector2f::ZERO; // 默认初始化为0
-		has_uv = false;                            // 标记没有材质贴图坐标
+		vertices[0] = a; vertices[1] = b; vertices[2] = c;
+		uvs[0] = uvs[1] = uvs[2] = Vector2f::ZERO;
+		has_uv = false;
+		has_vn = false; // 标记没有顶点法线
 		normal = Vector3f::cross(vertices[1] - vertices[0], vertices[2] - vertices[0]).normalized();
 	}
 
-	// 💡 增量重载：支持接收 3 个顶点 UV 坐标的全新构造函数，供带有纹理贴图的高模网格使用
+	// 2. 降级重载：带纹理构造函数（有 UV，无顶点法线）
 	Triangle(const Vector3f &a, const Vector3f &b, const Vector3f &c,
 			 const Vector2f &uv0, const Vector2f &uv1, const Vector2f &uv2, Material *m) : Object3D(m)
 	{
-		vertices[0] = a;
-		vertices[1] = b;
-		vertices[2] = c;
-		uvs[0] = uv0;
-		uvs[1] = uv1;
-		uvs[2] = uv2;
-		has_uv = true;                             // 标记持有有效的纹理贴图坐标
+		vertices[0] = a; vertices[1] = b; vertices[2] = c;
+		uvs[0] = uv0; uvs[1] = uv1; uvs[2] = uv2;
+		has_uv = true;
+		has_vn = false; // 标记没有顶点法线
 		normal = Vector3f::cross(vertices[1] - vertices[0], vertices[2] - vertices[0]).normalized();
 	}
 
+	// 3. 💡 核心新增：完全体构造函数（有 UV，有 3 个顶点各自独立的平滑法线）
+	Triangle(const Vector3f &a, const Vector3f &b, const Vector3f &c,
+			 const Vector2f &uv0, const Vector2f &uv1, const Vector2f &uv2,
+			 const Vector3f &n0, const Vector3f &n1, const Vector3f &n2, Material *m) : Object3D(m)
+	{
+		vertices[0] = a; vertices[1] = b; vertices[2] = c;
+		uvs[0] = uv0; uvs[1] = uv1; uvs[2] = uv2;
+		norms[0] = n0; norms[1] = n1; norms[2] = n2; // 💡 牢牢锁住 3 个顶点各自的法线，坚决不人工平均
+		has_uv = true;
+		has_vn = true; // 标记持有有效的顶点平滑法线
+		normal = Vector3f::cross(vertices[1] - vertices[0], vertices[2] - vertices[0]).normalized(); // 面几何法线
+	}
 	void setNormal(const Vector3f &n)
 	{
 		normal = n;
@@ -50,8 +58,19 @@ public:
 		return vertices[idx];
 	}
 
+	Vector2f getuv(int idx) const
+	{
+		return uvs[idx];
+	}
+	
+
+	
+
 	bool intersect(const Ray &ray, Hit &hit, float tmin) override
 	{
+		if (hit.getIntersectedObject() == this) {
+            return false;
+        }
 		// Möller-Trumbore algorithm using Cramer's rule
 		Vector3f E1 = vertices[1] - vertices[0];
 		Vector3f E2 = vertices[2] - vertices[0];
@@ -60,7 +79,7 @@ public:
 
 		Vector3f S1 = Vector3f::cross(D, E2);
 		float det = Vector3f::dot(E1, S1);
-
+		
 		// ray is parallel to the triangle plane
 		if (fabs(det) < 1e-6f)
 			return false;
@@ -82,31 +101,32 @@ public:
 		float t = Vector3f::dot(E2, S2) * invDet;
 
 		// Check if t is within valid range and closer than previous hits
-		if (t > tmin && t < hit.getT())
-		{
-			// Normal orientation: optionally flip normal to face the ray
-			Vector3f tempnormal = normal;
-			if (Vector3f::dot(tempnormal, D) > 0)
-			{
-				tempnormal = -tempnormal;
-			}
-			hit.set(t, material, tempnormal);
+		if (t > tmin && t < hit.getT()) {
+            float w = 1.0f - u - v;
+            // 💡 核心升级：利用求交得到的重心坐标插值出平滑的着色法线！
+            Vector3f shadingNormal = normal;
+            if (has_vn) {
+                shadingNormal = (w * norms[0] + u * norms[1] + v * norms[2]).normalized();
+            }
 
-			if (has_uv) {
-				float w = 1.0f - u - v; // 计算第三个顶点的插值权重
-				Vector2f interpolatedUV = w * uvs[0] + u * uvs[1] + v * uvs[2];
-				hit.setUV(interpolatedUV); 
-			}
-
-			return true;
-		}
-		return false;
-	}
-
+            if (Vector3f::dot(shadingNormal, ray.getDirection()) > 0) {
+                shadingNormal = -shadingNormal;
+            }
+            hit.set(t, material, shadingNormal); // 👈 传递给 PBR 计算
+			hit.setIntersectedObject(this);
+            if (has_uv) {
+                hit.setUV(w * uvs[0] + u * uvs[1] + v * uvs[2]); 
+            }
+            return true;
+        }
+        return false;
+    }
 protected:
-	Vector3f vertices[3];
-	Vector2f uvs[3];       // 💡 新增：存放三个顶点各自对应的 2D 纹理贴图坐标
-	Vector3f normal;
-	bool has_uv = false;   // 💡 新增：标记当前面片是否带有 UV
+    Vector3f vertices[3];
+    Vector2f uvs[3];       
+    Vector3f norms[3]; // 💡 新增
+    Vector3f normal;   // 几何面法线
+    bool has_uv = false;   
+    bool has_vn = false; // 💡 新增
 };
 #endif // TRIANGLE_H
