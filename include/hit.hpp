@@ -5,6 +5,7 @@
 #include "ray.hpp"
 
 class Material;
+class Object3D;
 
 class Hit {
 public:
@@ -61,8 +62,9 @@ public:
         normal = n;
     }
 public:
-    void* getIntersectedObject() const { return object_ptr; }
-    void setIntersectedObject(void* ptr) { object_ptr = ptr; }
+
+    Object3D* getIntersectedObject() const { return object_ptr; }
+    void setIntersectedObject(Object3D* ptr) { object_ptr = ptr; }
 
 // 确保在 Hit 构造函数或 reset 里面将其初始化为 nullptr：
     void reset() {
@@ -75,7 +77,7 @@ private:
     Material *material;
     Vector3f normal;
     Vector2f uv; // 💡 新增：交点处的 UV 纹理坐标账本
-    void* object_ptr = nullptr;
+    Object3D* object_ptr = nullptr;
 };
 
 inline std::ostream &operator<<(std::ostream &os, const Hit &h) {

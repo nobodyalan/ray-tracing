@@ -88,34 +88,36 @@ Vector3f traceRay(const Ray &ray, float tmin, int depth, int maxDepth, ScenePars
     float currentTmin = tmin;
     bool isIntersect = false;
 
-    // 💡 1. 健壮穿透求交循环：完美过滤半透明/空白外壳
-    while (true) {
-        hit = Hit(); 
-        isIntersect = baseGroup->intersect(currentRay, hit, currentTmin);
-        if (!isIntersect) break; 
+    // // 💡 1. 健壮穿透求交循环：完美过滤半透明/空白外壳
+    // while (true) {
+    //     hit = Hit(); 
+    //     isIntersect = baseGroup->intersect(currentRay, hit, currentTmin);
+    //     if (!isIntersect) break; 
 
-        Material *m = hit.getMaterial();
-        Vector2f raw_uv = hit.getUV();
+    //     Material *m = hit.getMaterial();
+    //     Vector2f raw_uv = hit.getUV();
 
-        // 内部防越界安全卡位测试
-        float su = fmod(raw_uv.x(), 1.0f); if (su < 0.0f) su += 1.0f;
-        float sv = fmod(raw_uv.y(), 1.0f); if (sv < 0.0f) sv += 1.0f;
+    //     // 内部防越界安全卡位测试
+    //     float su = fmod(raw_uv.x(), 1.0f); if (su < 0.0f) su += 1.0f;
+    //     float sv = fmod(raw_uv.y(), 1.0f); if (sv < 0.0f) sv += 1.0f;
         
 
-        Vector3f texColor = m->getDiffuseColor(su, sv);
+    //     Vector3f texColor = m->getDiffuseColor(su, sv);
 
-        // 透明判定守卫（Alpha Cutout）：如果材质全透，或者贴图踩中纯黑/纯白纯留白
-        bool isTransparentPatch = (m->getTransparency() > 0.8f) || 
-                                  (texColor.length() < 1e-3f) || 
-                                  ((Vector3f(1.0f) - texColor).length() < 1e-3f);
+    //     // 透明判定守卫（Alpha Cutout）：如果材质全透，或者贴图踩中纯黑/纯白纯留白
+    //     bool isTransparentPatch = (m->getTransparency() > 0.8f) || 
+    //                               (texColor.length() < 1e-3f) || 
+    //                               ((Vector3f(1.0f) - texColor).length() < 1e-3f);
 
-        if (isTransparentPatch) {
-            currentTmin = 5e-3f;
-            currentRay = Ray(currentRay.pointAtParameter(hit.getT()), currentRay.getDirection());
-            continue; 
-        }
-        break; 
-    }
+    //     if (isTransparentPatch) {
+    //         currentTmin = 5e-3f;
+    //         currentRay = Ray(currentRay.pointAtParameter(hit.getT()), currentRay.getDirection());
+    //         continue; 
+    //     }
+    //     break; 
+    // }
+    hit = Hit(); 
+    isIntersect = baseGroup->intersect(currentRay, hit, currentTmin);
 
     if (!isIntersect || hit.getT() > 20.0f)
     {

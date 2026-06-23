@@ -36,6 +36,7 @@ static void parseMTL(const string& mtlPath, std::map<string, Material*>& mtlMap)
             ss >> mtlName;
             currentMat = new Material();
             mtlMap[mtlName] = currentMat;
+            currentMat->setName(mtlName);
         } 
         else if (currentMat != nullptr) {
             if (token == "Kd") { 
@@ -129,6 +130,7 @@ void Mesh::initialize(const char *filename) {
             if (localMtlMap.find(mtlName) != localMtlMap.end()) {
                 activeMaterial = localMtlMap[mtlName];
             }
+            
         } 
         else if (token == "v") {
             float x, y, z;
@@ -181,6 +183,7 @@ void Mesh::initialize(const char *filename) {
     }
     
     f.close();
+    
     std::cout << ">> [Mesh Clean] Entering global geometric sorting for " << t_faces.size() << " triangles..." << std::endl;
 
     std::cout << ">> [Mesh Clean] Entering global geometric sorting for " << t_faces.size() << " triangles..." << std::endl;
@@ -209,7 +212,7 @@ void Mesh::initialize(const char *filename) {
             Vector3f cc = (curr->getVertex(0) + curr->getVertex(1) + curr->getVertex(2)) / 3.0f;
             Vector3f cp = (prev->getVertex(0) + prev->getVertex(1) + prev->getVertex(2)) / 3.0f;
 
-            if ((cc - cp).length() < 1e-5f) {
+            if ((cc - cp).length() < 1e-4f) {
                 Material* baseMat = prev->getMaterial();
                 Material* activeMaterial = curr->getMaterial();
 
@@ -230,15 +233,10 @@ void Mesh::initialize(const char *filename) {
         }
     }
 
-    // 💡 3. 核心解耦：建立一个类内或生命周期同等的延时垃圾池
-    // 为了防止析构函数循环释放，我们在 Mesh 内部只用 optimized_faces 交付渲染
     this->t_faces = optimized_faces;
 
     std::cout << ">> [Mesh Optimization] Globally filtered out " << deduplicated_count 
               << " disordered duplicate triangles! Remaining: " << this->t_faces.size() << std::endl;
-    // 接下来可以放心地去构建你的 BVH 树了：
-    // bvh_root = buildBVH(t_faces, 0, t_faces.size());
-    // 💡 加载完毕，单次编译生成 BVH 加速树
 
     // 💡 加载完毕，单次编译生成 BVH 加速树
     if (!t_faces.empty()) {
@@ -289,7 +287,7 @@ bool Mesh::intersectBVH(BVHNode* node, const Ray& r, Hit& h, float tmin) const {
     if (node == nullptr) return false;
     
     // AABB 粗筛
-    if (!node->box.intersect(r, tmin, h.getT())) return false;
+    if (!node->box.intersect(r, tmin, h.getT()+1e-2f)) return false;
 
     if (node->tri != nullptr) {
         return node->tri->intersect(r, h, tmin);

@@ -18,7 +18,7 @@ public:
     Material* getMaterial() const {
         return material; 
     }
-
+    virtual std::string getType() const { return "Object"; }
     void setMaterial(Material* m) {
         material = m;
     }
