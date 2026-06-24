@@ -73,7 +73,6 @@ public:
         if (distance < 1e-4f) return false;
         
         dirToLight = toLight.normalized();
-        // 根据大作业 4.3 节加分项的标准 PBR 拆分推导：点光源辐射度随距离平方衰减
         radianceFactor = color / (distance * distance); 
         return true;
     }
@@ -99,6 +98,15 @@ public:
     void getIllumination(const Vector3f &p, Vector3f &dir, Vector3f &col) const override {
         dir = (position - p).normalized();
         col = color;
+    }
+    float evaluateSpotAttenuation(const Vector3f &dirToLight) const {
+        // 计算从光源指向着色点的方向（即 -dirToLight）与聚光灯中轴线的夹角余弦
+        float cosTheta = Vector3f::dot(-dirToLight, direction);
+        if (cosTheta < cosOuter) return 0.0f;
+        if (cosTheta >= cosInner) return 1.0f;
+        
+        float spotAttenuation = (cosTheta - cosOuter) / (cosInner - cosOuter);
+        return spotAttenuation * spotAttenuation * (3.0f - 2.0f * spotAttenuation);
     }
 
     // 💡 聚光灯 NEE 适配：融合距离反比衰减与圆锥角余弦衰减

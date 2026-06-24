@@ -8,4 +8,6 @@ cmake --build build -j
 # Run all testcases. 
 # You can comment some lines to disable the run of specific examples.
 mkdir -p output/niko
-build/PA1 testcases/scene06.txt output/niko/scene04.bmp
+mkdir -p output/common
+build/PA1 testcases/scene01.txt output/common/scene01_compare_style.bmp
+build/PA1 testcases/scene07.txt output/niko/scene05.bmp

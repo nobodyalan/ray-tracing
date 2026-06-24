@@ -189,49 +189,120 @@ public:
 // 方法定义
     void setAmbientColor(const Vector3f& ka) { ambientColor = ka; }
     Vector3f getAmbientColor() const { return ambientColor; }
-    Vector3f getDiffuseColor(float u, float v) const {
-    if (texture != nullptr) {
-        float safe_u = u; if (safe_u < 0.0f) safe_u = 0.0f; if (safe_u >= 1.0f) safe_u = 0.9999f;
-        float safe_v = v; if (safe_v < 0.0f) safe_v = 0.0f; if (safe_v >= 1.0f) safe_v = 0.9999f;
+//     Vector3f getDiffuseColor(float u, float v) const {
+//     if (texture != nullptr) {
+//         float safe_u = u; if (safe_u < 0.0f) safe_u = 0.0f; if (safe_u >= 1.0f) safe_u = 0.9999f;
+//         float safe_v = v; if (safe_v < 0.0f) safe_v = 0.0f; if (safe_v >= 1.0f) safe_v = 0.9999f;
 
-        int x = (int)(safe_u * texture->Width());
-        int y = (int)(safe_v * texture->Height());
-        Vector3f srgbColor = diffuseColor; // 先初始化为主材质的基础颜色
-        if (x >= 0 && x < texture->Width() && y >= 0 && y < texture->Height()) {
-            srgbColor = texture->GetPixel(x, y);
+//         int x = (int)(safe_u * texture->Width());
+//         int y = (int)(safe_v * texture->Height());
+//         Vector3f srgbColor = diffuseColor; // 先初始化为主材质的基础颜色
+//         if (x >= 0 && x < texture->Width() && y >= 0 && y < texture->Height()) {
+//             srgbColor = texture->GetPixel(x, y);
+//             if (secondary_mat != nullptr && secondary_mat->texture != nullptr) {
+//                 // 如果存在副材质且副材质有贴图，则进行叠加采样
+//                 float safe_u_sub = fmod(u, 1.0f); if (safe_u_sub < 0.0f) safe_u_sub += 1.0f;
+//                 float safe_v_sub = fmod(v, 1.0f); if (safe_v_sub < 0.0f) safe_v_sub += 1.0f;
+//                 int sx = (int)(safe_u_sub * secondary_mat->texture->Width());
+//                 int sy = (int)(safe_v_sub * secondary_mat->texture->Height());
+//                 if (sx >= 0 && sx < secondary_mat->texture->Width() && sy >= 0 && sy < secondary_mat->texture->Height()) {
+//                     Vector3f sub_color = secondary_mat->texture->GetPixel(sx, sy);
+//                     // 简单的线性叠加，权重可以根据需要调整
+
+//                     bool isMainBlack = srgbColor.length() < 0.02f;
+//                     bool isSubBlack = sub_color.length() < 0.02f;
+//                     if(isMainBlack && !isSubBlack)
+//                     {
+//                         srgbColor = sub_color;
+//                     }
+//                     else if(!isMainBlack && !isSubBlack)
+//                     {
+//                         srgbColor = 0.7*srgbColor + 0.5*sub_color;
+//                     }
+//                 }
+//             }
+//             // 💡 逆 Gamma 操作 (Linearize)：将贴图颜色从 sRGB 转换到线性空间
+//             return Vector3f(
+//                 powf(srgbColor.x(), 2.2f),
+//                 powf(srgbColor.y(), 2.2f),
+//                 powf(srgbColor.z(), 2.2f)
+//             );
+//         }
+//     }
+//     // 如果没有纹理，降级返回常数底色，常数固有色通常在建模软件里也是线性空间的
+//     return diffuseColor; 
+// }
+    Vector3f getDiffuseColor(float u, float v) const {
+        if (texture != nullptr) {
+            // 1. 强制安全边界防护，防止浮点数微小溢出
+            float safe_u = u; if (safe_u < 0.0f) safe_u = 0.0f; if (safe_u >= 1.0f) safe_u = 0.9999f;
+            float safe_v = v; if (safe_v < 0.0f) safe_v = 0.0f; if (safe_v >= 1.0f) safe_v = 0.9999f;
+
+            // 🌟 【双线性插值核心】计算在图片像素坐标系下的浮点坐标
+            float tex_x = safe_u * (texture->Width() - 1);
+            float tex_y = safe_v * (texture->Height() - 1);
+
+            int x0 = (int)tex_x;
+            int y0 = (int)tex_y;
+            int x1 = std::min(x0 + 1, texture->Width() - 1);
+            int y1 = std::min(y0 + 1, texture->Height() - 1);
+
+            // 计算插值权重百分比
+            float tx = tex_x - x0;
+            float ty = tex_y - y0;
+
+            // 获取周围 4 个相邻像素的颜色
+            Vector3f c00 = texture->GetPixel(x0, y0);
+            Vector3f c10 = texture->GetPixel(x1, y0);
+            Vector3f c01 = texture->GetPixel(x0, y1);
+            Vector3f c11 = texture->GetPixel(x1, y1);
+
+            // 进行双线性混合
+            Vector3f srgbColor = (1.0f - tx) * (1.0f - ty) * c00 +
+                                 tx * (1.0f - ty) * c10 +
+                                 (1.0f - tx) * ty * c01 +
+                                 tx * ty * c11;
+
+            // 2. 处理副材质的叠加采样（保留你原本的多材质复合 Hack 逻辑）
             if (secondary_mat != nullptr && secondary_mat->texture != nullptr) {
-                // 如果存在副材质且副材质有贴图，则进行叠加采样
                 float safe_u_sub = fmod(u, 1.0f); if (safe_u_sub < 0.0f) safe_u_sub += 1.0f;
                 float safe_v_sub = fmod(v, 1.0f); if (safe_v_sub < 0.0f) safe_v_sub += 1.0f;
-                int sx = (int)(safe_u_sub * secondary_mat->texture->Width());
-                int sy = (int)(safe_v_sub * secondary_mat->texture->Height());
-                if (sx >= 0 && sx < secondary_mat->texture->Width() && sy >= 0 && sy < secondary_mat->texture->Height()) {
-                    Vector3f sub_color = secondary_mat->texture->GetPixel(sx, sy);
-                    // 简单的线性叠加，权重可以根据需要调整
+                
+                // 对副材质同样应用快速双线性插值
+                float sub_tex_x = safe_u_sub * (secondary_mat->texture->Width() - 1);
+                float sub_tex_y = safe_v_sub * (secondary_mat->texture->Height() - 1);
+                int sx0 = (int)sub_tex_x; int sy0 = (int)sub_tex_y;
+                int sx1 = std::min(sx0 + 1, secondary_mat->texture->Width() - 1);
+                int sy1 = std::min(sy0 + 1, secondary_mat->texture->Height() - 1);
+                float stx = sub_tex_x - sx0; float sty = sub_tex_y - sy0;
 
-                    bool isMainBlack = srgbColor.length() < 0.02f;
-                    bool isSubBlack = sub_color.length() < 0.02f;
-                    if(isMainBlack && !isSubBlack)
-                    {
-                        srgbColor = sub_color;
-                    }
-                    else if(!isMainBlack && !isSubBlack)
-                    {
-                        srgbColor = 0.7*srgbColor + 0.5*sub_color;
-                    }
+                Vector3f sc00 = secondary_mat->texture->GetPixel(sx0, sy0);
+                Vector3f sc10 = secondary_mat->texture->GetPixel(sx1, sy0);
+                Vector3f sc01 = secondary_mat->texture->GetPixel(sx0, sy1);
+                Vector3f sc11 = secondary_mat->texture->GetPixel(sx1, sy1);
+                Vector3f sub_color = (1.0f - stx) * (1.0f - sty) * sc00 +
+                                     stx * (1.0f - sty) * sc10 +
+                                     (1.0f - stx) * sty * sc01 +
+                                     stx * sty * sc11;
+
+                bool isMainBlack = srgbColor.length() < 0.02f;
+                bool isSubBlack = sub_color.length() < 0.02f;
+                if (isMainBlack && !isSubBlack) {
+                    srgbColor = sub_color;
+                } else if (!isMainBlack && !isSubBlack) {
+                    srgbColor = 0.7f * srgbColor + 0.5f * sub_color;
                 }
             }
-            // 💡 逆 Gamma 操作 (Linearize)：将贴图颜色从 sRGB 转换到线性空间
+
+            // 3. 逆 Gamma 操作 (Linearize)：确保所有混合后的色彩在线性空间参与物理渲染
             return Vector3f(
                 powf(srgbColor.x(), 2.2f),
                 powf(srgbColor.y(), 2.2f),
                 powf(srgbColor.z(), 2.2f)
             );
         }
+        return diffuseColor; 
     }
-    // 如果没有纹理，降级返回常数底色，常数固有色通常在建模软件里也是线性空间的
-    return diffuseColor; 
-}
     
     
     virtual float getRoughness() const { return roughness; }

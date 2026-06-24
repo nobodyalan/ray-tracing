@@ -1,6 +1,6 @@
 PerspectiveCamera {
-    center 0.8 1.3 5
-    direction -0.1 -0.12 -1
+    center 0.4 1.3 4.8
+    direction -0.05 -0.12 -1
     up 0 1 0
     angle 35
     width 800
@@ -8,21 +8,13 @@ PerspectiveCamera {
 }
 
 Lights {
-    numLights 2
+    numLights 1
     AreaLight {
-        position -1 2.99 3
+        position -1 2.99 2
         dir1 2 0 0
         dir2 0 0 2
         color 1 1 1
-        intensity 6
-    }
-    SpotLight {
-        position 0 1.5 8
-        direction 0 -0.1 -1
-        color 1 1 1
-        intensity 3
-        innerAngle 20
-        outerAngle 8
+        intensity 5
     }
 }
 Background {
@@ -100,7 +92,7 @@ Materials {
 }
 
 Group {
-    numObjects 13
+    numObjects 11
     MaterialIndex 0
     Transform {
         Translate 0 0 -1
@@ -110,7 +102,7 @@ Group {
     }
     MaterialIndex 0
     Transform {
-        Translate -0.4 1.6 0
+        Translate -0.3 1.6 -0.5
         Scale 0.8 0.8 0.8
         TriangleMesh {
             obj_file mesh/niko.obj
@@ -134,7 +126,7 @@ Group {
             obj_file mesh/aliceduduke.obj
         }
     }
-    MaterialIndex 12
+    MaterialIndex 3
     Plane {
         normal 0 1 0
         offset 0
@@ -168,20 +160,6 @@ Group {
     Plane {
         normal 0 1 0
         offset 3
-    }
-    MaterialIndex 4
-    Transform {
-        Translate -0.8 0 0.8
-        YRotate 30
-        Cube {
-            min_p -0.5 0 -0.125
-            max_p 0.5 1 0.125
-        }
-    }
-    MaterialIndex 2
-    Cube {
-        min_p -0.7 0 -2.99
-        max_p 0.75 2 -2.9
     }
 
 }
