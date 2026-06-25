@@ -10,4 +10,4 @@ cmake --build build -j
 mkdir -p output/niko
 mkdir -p output/NiCole
 
-build/PA1 testcases/scene07.txt output/NiCole/styled.bmp
+build/PA1 testcases/scene01.txt output/common/test1.bmp
