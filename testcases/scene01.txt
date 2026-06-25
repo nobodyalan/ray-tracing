@@ -11,10 +11,10 @@ Lights {
     numLights 1
     AreaLight {
         position -1.5 2.9 -3
-        dir1 3.0 0 0
-        dir2 0 0 3.0
+        dir1 1.0 0 0
+        dir2 0 0 1.0
         color 3.0 3.0 3.0
-        intensity 1
+        intensity 5
     }
 }
 

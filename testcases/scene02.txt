@@ -14,6 +14,7 @@ Lights {
         dir1 3.0 0 0
         dir2 0 0 3.0
         color 3.5 3.5 3.5
+        intensity 1
     }
 }
 
@@ -24,15 +25,15 @@ Background {
 Materials {
     numMaterials 7
     Material { 
-        diffuseColor 0.8 0.8 0.8 
+        diffuseColor 0.8 0.8 0.8
+        specularColor 0.5 0.5 0.5
+        shininess 25 
     }
     Material { 
         diffuseColor 0.8 0.05 0.05
-        reflectiveColor 0.2 0.2 0.2 
     }
     Material { 
         diffuseColor 0.05 0.8 0.05 
-        reflectiveColor 0.2 0.2 0.2 
     }
     Material {
         diffuseColor 0.0 0.0 0.0
@@ -40,12 +41,12 @@ Materials {
         reflectiveColor 0.2 0.2 0.2 
     }
     Material { 
-        diffuseColor 0 0 0 
+        diffuseColor 1 1 1 
         reflectiveColor 1 1 1       
         indexOfRefraction 1.5
     }
     Material { 
-        diffuseColor 0 0 0 
+        diffuseColor 1 1 1
         reflectiveColor 0.9 0.9 1.0 
         indexOfRefraction 1.333     
     }

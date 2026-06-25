@@ -173,7 +173,32 @@ float evaluateBRDFPdf(const Vector3f &N, const Vector3f &V, const Vector3f &L, M
 
     return pdf_diffuse_eval * p_diffuse + pdf_specular_eval * p_specular;
 }
-Vector3f traceRay(const Ray &ray, float tmin, int depth, int maxDepth, SceneParser &sceneParser, bool isSpecular = true, bool usePathTracing = true)
+// ======================================================================
+// 渲染功能开关：集中在此处修改以满足大作业对比图要求
+// ======================================================================
+struct RenderConfig {
+    // 基础要求对比 §3.3：Whitted-Style vs 路径追踪
+    // false = 路径追踪（含间接光蒙特卡洛积分）
+    // true  = Whitted-Style（仅直接光，无漫反射间接弹射，无噪声）
+    bool useWhittedStyle = false;
+
+    // 基础要求对比 §4.1：是否启用 NEE（Next Event Estimation）
+    // true  = 主动对光源采样，收敛快
+    // false = 仅靠随机光线命中光源，噪声大，用于对比分析
+    bool useNEE = false;
+
+    // 加分项 §4.2：折射界面的菲涅尔系数（Schlick 近似）
+    // true  = 折射界面同时有部分反射，反射率由 cos θ 决定
+    // false = 基础要求：仅全反射或折射，无菲涅尔部分反射
+    bool useFresnel = false;
+
+    // 加分项 §4.3：多重重要性采样（MIS，Balance Heuristic）
+    // true  = NEE 直接光与 BRDF 间接命中光源均用 MIS 加权，避免双重计数
+    // false = NEE 直接光用全权重（mis_weight=1），面光源不参与间接计数
+    bool useMIS = false;
+};
+
+Vector3f traceRay(const Ray &ray, float tmin, int depth, int maxDepth, SceneParser &sceneParser, const RenderConfig& cfg)
 {
     Hit hit; 
     Group *baseGroup = sceneParser.getGroup();
@@ -197,7 +222,8 @@ Vector3f traceRay(const Ray &ray, float tmin, int depth, int maxDepth, ScenePars
 
     float P_RR = 0.8f;
     float rrScale = 1.0f;
-    if (usePathTracing && depth > 0) {
+    // Whitted-Style 无随机终止；路径追踪在 depth>0 时应用轮盘赌
+    if (!cfg.useWhittedStyle && depth > 0) {
         if (dis(gen) > P_RR) return Vector3f::ZERO;
         rrScale = 1.0f / P_RR;
     }
@@ -267,58 +293,61 @@ Vector3f traceRay(const Ray &ray, float tmin, int depth, int maxDepth, ScenePars
 
         Vector3f transmissionColor = m->getDiffuseColor(safe_u, safe_v);
         float transFactor = m->getTransparency();
+
+        // 菲涅尔 NEE：仅在启用菲涅尔时计算折射界面上的直接高光反射贡献
+        // 关闭菲涅尔（基础要求）时跳过，界面无部分反射
         Vector3f L_specular_nee = Vector3f::ZERO;
-        for (int i = 0; i < sceneParser.getNumLights(); ++i) {
-            Light* light = sceneParser.getLight(i);
-            Vector3f L_dir; Vector3f radianceFactor; float dist;
-            
-            if (light->sampleNEE(p, N, dis(gen), dis(gen), L_dir, radianceFactor, dist)) {
-                Vector3f R_dir = (D - 2.0f * Vector3f::dot(D, Ng) * Ng).normalized();
-                float specAngle = Vector3f::dot(R_dir, L_dir);
-                
-                if (specAngle > 0.0f) {
-                    Vector3f shadowRayOrigin = p + Ng * 5e-3f; 
-                    Vector3f shadowRayDir = L_dir;             
-                    Vector3f shadowAttenuation = Vector3f(1.0f); 
-                    Vector3f realLightPos = p + L_dir * dist; 
-                    
-                    while (true) {
-                        Ray shadowRay(shadowRayOrigin, shadowRayDir);
-                        Hit shadowHit; 
-                        bool hasHit = baseGroup->intersect(shadowRay, shadowHit, 1e-4f);
-                        float currentDistToLight = (realLightPos - shadowRayOrigin).length() - 1e-3f;
-                        
-                        if (!hasHit || shadowHit.getT() >= currentDistToLight) break;
-                        if (shadowHit.getMaterial()->getEmission().length() > 1e-6f) break;
-                        
-                        float h_refIdx = shadowHit.getMaterial()->getRefractiveIndex();
-                        if (std::abs(h_refIdx - 1.0f) > 1e-6) {
-                            shadowAttenuation = shadowAttenuation * shadowHit.getMaterial()->getDiffuseColor();
-                            shadowRayOrigin = shadowRay.pointAtParameter(shadowHit.getT() + 5e-3f);
+        if (cfg.useFresnel) {
+            for (int i = 0; i < sceneParser.getNumLights(); ++i) {
+                Light* light = sceneParser.getLight(i);
+                Vector3f L_dir; Vector3f radianceFactor; float dist;
+                if (light->sampleNEE(p, N, dis(gen), dis(gen), L_dir, radianceFactor, dist)) {
+                    Vector3f R_dir = (D - 2.0f * Vector3f::dot(D, Ng) * Ng).normalized();
+                    float specAngle = Vector3f::dot(R_dir, L_dir);
+                    if (specAngle > 0.0f) {
+                        Vector3f shadowRayOrigin = p + Ng * 5e-3f;
+                        Vector3f shadowRayDir = L_dir;
+                        Vector3f shadowAttenuation = Vector3f(1.0f);
+                        Vector3f realLightPos = p + L_dir * dist;
+                        while (true) {
+                            Ray shadowRay(shadowRayOrigin, shadowRayDir);
+                            Hit shadowHit;
+                            bool hasHit = baseGroup->intersect(shadowRay, shadowHit, 1e-4f);
+                            float currentDistToLight = (realLightPos - shadowRayOrigin).length() - 1e-3f;
+                            if (!hasHit || shadowHit.getT() >= currentDistToLight) break;
+                            if (shadowHit.getMaterial()->getEmission().length() > 1e-6f) break;
+                            float h_refIdx = shadowHit.getMaterial()->getRefractiveIndex();
+                            if (std::abs(h_refIdx - 1.0f) > 1e-6) {
+                                shadowAttenuation = shadowAttenuation * shadowHit.getMaterial()->getDiffuseColor();
+                                shadowRayOrigin = shadowRay.pointAtParameter(shadowHit.getT() + 5e-3f);
+                            } else {
+                                shadowAttenuation = Vector3f::ZERO; break;
+                            }
                         }
-                        else {
-                            shadowAttenuation = Vector3f::ZERO; break;
+                        if (shadowAttenuation.length() > 1e-5f) {
+                            // 菲涅尔反射部分 + 透射部分各自加权
+                            L_specular_nee += radianceFactor * shadowAttenuation * powf(specAngle, 50.0f) * Fr;
+                            L_specular_nee += radianceFactor * shadowAttenuation * (1.0f - Fr) * transmissionColor * transFactor;
                         }
-                    }
-                    
-                    if (shadowAttenuation.length() > 1e-5f) {
-                        // 🌟 修复：去掉硬 Clamp，确保蒙特卡洛高阶项无偏
-                        Vector3f singleSpecularContrib = radianceFactor * shadowAttenuation * powf(specAngle, 50.0f) * Fr;
-                        L_specular_nee += singleSpecularContrib;
-                        Vector3f transmittedDirect = radianceFactor * shadowAttenuation * (1.0f - Fr) * transmissionColor * transFactor;
-                        L_specular_nee += transmittedDirect;
                     }
                 }
             }
         }
 
-        if (sin2_t > 1.0f || dis(gen) < Fr) { 
+        // 折射/全反射路径决策：
+        // 开启菲涅尔：Schlick 近似决定反射概率（随机采样）
+        // 关闭菲涅尔（基础要求 §3.1）：sin2_t>1 才全反射，否则始终折射
+        bool doReflect = (sin2_t > 1.0f) || (cfg.useFresnel && dis(gen) < Fr);
+        if (doReflect) {
             Vector3f R = (D - 2.0f * Vector3f::dot(D, Ng) * Ng).normalized();
-            Vector3f indirect = traceRay(Ray(p + R * 5e-3f, R), 1e-4f, depth + 1, maxDepth, sceneParser, true, usePathTracing);
+            Vector3f indirect = traceRay(Ray(p + R * 5e-3f, R), 1e-4f, depth + 1, maxDepth, sceneParser, cfg);
             return L_specular_nee * reflectiveColor + indirect * reflectiveColor * rrScale;
-        } else { 
+            // // 纯介质（如玻璃）reflectiveColor=(0,0,0)时，菲涅尔反射仍应有贡献，fallback 为白色
+            // Vector3f reflAtten = (reflectiveColor.length() > 1e-6f) ? reflectiveColor : Vector3f(1.0f);
+            // return L_specular_nee * reflAtten + indirect * reflAtten * rrScale;
+        } else {
             Vector3f T = (ratio * D + (ratio * cos_i - cos_t) * Ng).normalized();
-            Vector3f indirect = traceRay(Ray(p + T * 5e-3f, T), 1e-4f, depth + 1, maxDepth, sceneParser, true, usePathTracing);
+            Vector3f indirect = traceRay(Ray(p + T * 5e-3f, T), 1e-4f, depth + 1, maxDepth, sceneParser, cfg);
             Vector3f attenuation = transmissionColor * m->getTransparency();
             return indirect * attenuation * rrScale;
         }
@@ -326,7 +355,7 @@ Vector3f traceRay(const Ray &ray, float tmin, int depth, int maxDepth, ScenePars
     else if (isReflective) {
         Vector3f R = (D - 2.0f * Vector3f::dot(D, N) * N).normalized();
         Vector3f offsetP = p + R * 5e-3f;
-        Vector3f indirect = traceRay(Ray(offsetP, R), 1e-4f, depth + 1, maxDepth, sceneParser, true, usePathTracing);
+        Vector3f indirect = traceRay(Ray(offsetP, R), 1e-4f, depth + 1, maxDepth, sceneParser, cfg);
         return indirect * reflectiveColor * rrScale;
     }
 
@@ -335,7 +364,9 @@ Vector3f traceRay(const Ray &ray, float tmin, int depth, int maxDepth, ScenePars
     float alpha = roughness * roughness;
     float alpha2 = alpha * alpha;
 
-    for (int i = 0; i < sceneParser.getNumLights(); ++i) {
+    // NEE 开关（§4.1 对比项）：关闭时 L_direct=0，光源贡献只来自随机光线命中光源面
+    // Whitted-Style 模式不走 NEE（含随机采样），后面专用 Phong 分支处理直接光
+    for (int i = 0; cfg.useNEE && !cfg.useWhittedStyle && i < sceneParser.getNumLights(); ++i) {
         Light* light = sceneParser.getLight(i);
         Vector3f L_dir; Vector3f radianceFactor; float dist;
         
@@ -401,22 +432,59 @@ Vector3f traceRay(const Ray &ray, float tmin, int depth, int maxDepth, ScenePars
                         pdf_light = (cosThetaLight > 1e-5f) ? (safe_dist2 / (area * cosThetaLight)) : 0.0f;
                     }
 
+                    // MIS 开关（加分项 §4.3）：
+                    // 开启：balance heuristic，NEE 权重=pdf_light/(pdf_light+pdf_brdf)
+                    // 关闭：NEE 全权重，面光源间接路径不再计数（见下方间接路径处理）
                     float mis_weight = 1.0f;
-                    if (pdf_light + pdf_brdf > 1e-6f && areaLight != nullptr) {
+                    if (cfg.useMIS && pdf_light + pdf_brdf > 1e-6f && areaLight != nullptr) {
                         mis_weight = pdf_light / (pdf_light + pdf_brdf);
                     }
 
-                    // 🌟 修复：去除直接光的内层硬钳制（Clamp）
                     Vector3f singleSampleContrib = radianceFactor * shadowAttenuation * brdf_val * cosThetaP * mis_weight;
                     L_direct += singleSampleContrib;
                 }
             }
         }
     }
-    
-    if (!usePathTracing) {
-        return L_direct * rrScale;
-    } 
+
+    // Whitted-Style 模式：确定性 Phong 着色，无噪声（§3 基础要求）
+    // 核心修复：改用 sampleNEE(u=0.5, v=0.5) 取光源中心点，
+    // 其返回的 radianceFactor 已包含 cosθ_light × area / dist² 距离衰减项，
+    // 与路径追踪 NEE 使用相同的辐射度量纲，避免 getIllumination() 无衰减导致的过曝
+    if (cfg.useWhittedStyle) {
+        Vector3f L_phong = Vector3f::ZERO;
+        for (int i = 0; i < sceneParser.getNumLights(); ++i) {
+            Light* light = sceneParser.getLight(i);
+
+            Vector3f L_dir_ph, radFactor_ph;
+            float dist_ph;
+            // u=v=0.5：面光源取几何中心，点光源/方向光忽略 u,v
+            if (!light->sampleNEE(p, N_diffuse, 0.5f, 0.5f, L_dir_ph, radFactor_ph, dist_ph)) continue;
+
+            float cosThetaP_ph = std::max(0.0f, Vector3f::dot(N_diffuse, L_dir_ph));
+            if (cosThetaP_ph <= 0.0f) continue;
+
+            // 确定性阴影检测（dist_ph 已由 sampleNEE 给出，无需额外计算）
+            Ray shadowRay(p + N_diffuse * 5e-3f, L_dir_ph);
+            Hit shadowHit;
+            bool blocked = baseGroup->intersect(shadowRay, shadowHit, 1e-4f)
+                           && shadowHit.getT() < dist_ph - 1e-3f
+                           && shadowHit.getMaterial()->getEmission().length() <= 1e-6f;
+            if (blocked) continue;
+
+            // Phong 漫反射：÷π 使能量量纲与渲染方程一致（漫反射 BRDF = albedo/π）
+            L_phong += radFactor_ph * (m->getDiffuseColor(safe_u, safe_v) / M_PI) * cosThetaP_ph;
+
+            // Phong 镜面高光
+            float shin = m->getShininess();
+            if (shin > 0.0f && m->getSpecularColor().length() > 1e-5f) {
+                Vector3f R_ph = (2.0f * cosThetaP_ph * N_diffuse - L_dir_ph).normalized();
+                float specAngle = std::max(0.0f, Vector3f::dot(R_ph, V));
+                L_phong += radFactor_ph * m->getSpecularColor() * powf(specAngle, shin);
+            }
+        }
+        return (L_phong + m->getAmbientColor() * 0.15f) * rrScale;
+    }
     
     Vector3f L_indirect = Vector3f::ZERO;
     float u1 = dis(gen); float u2 = dis(gen); float selectType = dis(gen); 
@@ -461,40 +529,50 @@ Vector3f traceRay(const Ray &ray, float tmin, int depth, int maxDepth, ScenePars
             Ray nextRay(p + targetNormal * 1e-3f, nextDir);
             Hit nextHit;
             bool isNextIntersect = baseGroup->intersect(nextRay, nextHit, 1e-3f);
-            
-            if (isNextIntersect) {
-                Material* nextMat = nextHit.getMaterial();
-                Vector3f nextEmission = nextMat->getEmission();
-                Vector3f indirect_radiance = traceRay(nextRay, 1e-3f, depth + 1, maxDepth, sceneParser, false, true);
-                
-                if (nextEmission.length() > 1e-6f) {
-                    float pdf_light = 0.0f;
-                    for (int l_idx = 0; l_idx < sceneParser.getNumLights(); ++l_idx) {
-                        AreaLight* areaLight = dynamic_cast<AreaLight*>(sceneParser.getLight(l_idx));
-                        if (areaLight != nullptr) {
-                            Vector3f p00 = areaLight->getSamplePoint(0,0);
-                            Vector3f d1 = areaLight->getSamplePoint(1,0) - p00;
-                            Vector3f d2 = areaLight->getSamplePoint(0,1) - p00;
-                            Vector3f hitP = nextRay.pointAtParameter(nextHit.getT());
-                            
-                            float u_l = Vector3f::dot(hitP - p00, d1) / d1.squaredLength();
-                            float v_l = Vector3f::dot(hitP - p00, d2) / d2.squaredLength();
-                            
-                            if (u_l >= 0.0f && u_l <= 1.0f && v_l >= 0.0f && v_l <= 1.0f) {
-                                Vector3f hitN_light = nextHit.getNormal().normalized();
-                                float cosAlpha = std::max(0.0f, Vector3f::dot(-nextDir, hitN_light));
-                                float lightDist2 = std::max(nextHit.getT() * nextHit.getT(), 1e-3f); 
-                                float lightArea = d1.length() * d2.length();
-                                pdf_light = (cosAlpha > 1e-5f) ? (lightDist2 / (lightArea * cosAlpha)) : 0.0f;
-                                break;
+
+            {
+                Vector3f indirect_radiance = traceRay(nextRay, 1e-3f, depth + 1, maxDepth, sceneParser, cfg);
+
+                bool nextHitLight = isNextIntersect && nextHit.getMaterial()->getEmission().length() > 1e-6f;
+                if (nextHitLight) {
+                    // 间接命中光源的 MIS 处理：
+                    // useNEE=false：随机采样是唯一光源，full weight（mis_weight=1）
+                    // useNEE=true, useMIS=false：NEE 已全权计数直接光，间接不再计面光源贡献
+                    // useNEE=true, useMIS=true ：balance heuristic 平衡 NEE 和 BRDF 采样
+                    if (!cfg.useNEE) {
+                        // 无 NEE：随机命中光源全权计入（§4.1 对比图 w/o NEE）
+                        L_indirect = (brdf_val * indirect_radiance * cosThetaNext) / pdf_val;
+                    } else if (!cfg.useMIS) {
+                        // 有 NEE 无 MIS：NEE 已全权计，间接不再计面光源以避免双重计数
+                        L_indirect = Vector3f::ZERO;
+                    } else {
+                        // 有 NEE 有 MIS：计算 BRDF 采样权重
+                        float pdf_light = 0.0f;
+                        for (int l_idx = 0; l_idx < sceneParser.getNumLights(); ++l_idx) {
+                            AreaLight* areaLight = dynamic_cast<AreaLight*>(sceneParser.getLight(l_idx));
+                            if (areaLight != nullptr) {
+                                Vector3f p00 = areaLight->getSamplePoint(0,0);
+                                Vector3f d1 = areaLight->getSamplePoint(1,0) - p00;
+                                Vector3f d2 = areaLight->getSamplePoint(0,1) - p00;
+                                Vector3f hitP = nextRay.pointAtParameter(nextHit.getT());
+                                float u_l = Vector3f::dot(hitP - p00, d1) / d1.squaredLength();
+                                float v_l = Vector3f::dot(hitP - p00, d2) / d2.squaredLength();
+                                if (u_l >= 0.0f && u_l <= 1.0f && v_l >= 0.0f && v_l <= 1.0f) {
+                                    Vector3f hitN_light = nextHit.getNormal().normalized();
+                                    float cosAlpha = std::max(0.0f, Vector3f::dot(-nextDir, hitN_light));
+                                    float lightDist2 = std::max(nextHit.getT() * nextHit.getT(), 1e-3f);
+                                    float lightArea = d1.length() * d2.length();
+                                    pdf_light = (cosAlpha > 1e-5f) ? (lightDist2 / (lightArea * cosAlpha)) : 0.0f;
+                                    break;
+                                }
                             }
                         }
+                        float mis_weight = 1.0f;
+                        if (pdf_val + pdf_light > 1e-6f && pdf_light > 0.0f) {
+                            mis_weight = pdf_val / (pdf_val + pdf_light);
+                        }
+                        L_indirect = (brdf_val * indirect_radiance * cosThetaNext * mis_weight) / pdf_val;
                     }
-                    float mis_weight = 1.0f;
-                    if (pdf_val + pdf_light > 1e-6f && pdf_light > 0.0f) {
-                        mis_weight = pdf_val / (pdf_val + pdf_light);
-                    }
-                    L_indirect = (brdf_val * indirect_radiance * cosThetaNext * mis_weight) / pdf_val;
                 } else {
                     L_indirect = (brdf_val * indirect_radiance * cosThetaNext) / pdf_val;
                 }
@@ -607,8 +685,22 @@ int main(int argc, char *argv[])
     Camera *camera = sceneParser.getCamera();
     Image renderedImg(camera->getWidth(), camera->getHeight());
 
-    int ssaaSide = 20; 
-    int totalSamples = ssaaSide * ssaaSide; // 100个光线样本
+    RenderConfig cfg;
+    cfg.useWhittedStyle = false; // §3.3 对比：改为 true 生成 Whitted-Style 图
+    cfg.useNEE          = true;  // §4.1 对比：改为 true 生成有 NEE 对比图
+    cfg.useFresnel      = true;  // §4.2 加分：改为 false 生成无菲涅尔对比图
+    cfg.useMIS          = true;  // §4.3 加分：改为 false 生成无 MIS 对比图
+
+    bool useStylizedRendering = true;  // §5.1 加分：风格化渲染开关
+    bool useGammaCorrection   = true;  // §5.5 加分：Gamma 2.2 校正开关
+
+    // Whitted-Style 使用少量样本（抗锯齿即可，无需大量蒙特卡洛样本）
+    // 路径追踪使用较多样本以降低噪声
+    int ssaaSide = cfg.useWhittedStyle ? 1 : 20;
+    int totalSamples = ssaaSide * ssaaSide;
+
+    // Whitted-Style 不做风格化后处理（结果应直接反映物理光照）
+    if (cfg.useWhittedStyle) useStylizedRendering = false;
 
     int K_degree = 8;
     std::vector<float> cheby_alpha;
@@ -626,8 +718,6 @@ int main(int argc, char *argv[])
         {0, -7, 0, 56, 0, -112, 0, 64, 0},        // T7
         {1, 0, -32, 0, 160, 0, -256, 0, 128}      // T8
     };
-
-    bool useStylizedRendering = true; 
 
     #pragma omp parallel for schedule(dynamic, 1)
     for (int x = 0; x < camera->getWidth(); ++x)
@@ -668,7 +758,7 @@ int main(int argc, char *argv[])
                         }
                     }
 
-                    Vector3f rad = traceRay(camRay, 1e-4f, 0, 6, sceneParser, true, true);
+                    Vector3f rad = traceRay(camRay, 1e-4f, 0, 6, sceneParser, cfg);
                     
                     rawPixelColor += rad;
                     total_weight += 1.0f;
@@ -763,12 +853,14 @@ int main(int argc, char *argv[])
                 }
             }
 
-            // 色彩空间最末端硬件 Gamma 2.2 输出校正
-            finalPixelColor = Vector3f(
-                powf(std::max(0.0f, finalPixelColor.x()), 1.0f / 2.2f),
-                powf(std::max(0.0f, finalPixelColor.y()), 1.0f / 2.2f),
-                powf(std::max(0.0f, finalPixelColor.z()), 1.0f / 2.2f)
-            );
+            // Gamma 2.2 输出校正（§5.5 加分项，关闭时输出线性空间颜色）
+            if (useGammaCorrection) {
+                finalPixelColor = Vector3f(
+                    powf(std::max(0.0f, finalPixelColor.x()), 1.0f / 2.2f),
+                    powf(std::max(0.0f, finalPixelColor.y()), 1.0f / 2.2f),
+                    powf(std::max(0.0f, finalPixelColor.z()), 1.0f / 2.2f)
+                );
+            }
 
             finalPixelColor = Vector3f(
                 std::min(1.0f, finalPixelColor.x()),
